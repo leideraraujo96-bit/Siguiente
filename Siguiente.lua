@@ -16,6 +16,7 @@ ns.DEFAULTS = {
     arrowScale = 1,
     mapPins = true,      -- números en el mapa del mundo
     miniPins = true,     -- números en el minimapa
+    mapPinCount = 8,     -- pasos próximos en el mapa (además del actual)
     autoTravel = true,   -- llevarte a otra zona cuando rinda más XP por hora
     allowOrange = false, -- incluir misiones naranjas (más XP, más difíciles)
     allowGroup = false,  -- incluir misiones de grupo (élite)

@@ -793,6 +793,8 @@ function Guide.DrawPins()
     local skips = State().skips[g.id] or {}
     local cur = Guide.focus or Guide.current
     if not cur then return end
+    -- El paso actual y los próximos N (opción "Pasos en el mapa"), no toda la ruta.
+    local limit = 1 + math.max(0, math.min(PINS_ON_MAP, opt.mapPinCount or 8))
     local n = 0
     for k = cur, #g.steps do
         local stt = Guide.statuses[k]
@@ -803,26 +805,32 @@ function Guide.DrawPins()
                 local kind = StepKind(g.steps[k], stt)
                 local rgb = ns.Route.KIND_RGB[kind] or { 1, 1, 1 }
                 local tip = "Paso " .. k .. ": " .. StepTitle(g.steps[k], stt)
-                local size = (k == cur) and 24 or 18
-                if opt.mapPins ~= false then
-                    local p = Pin(pins, n)
+                local isCur = k == cur
+                local function Style(p)
+                    local size = isCur and 28 or 18
                     p.text:SetText(k)
                     p:SetSize(math.max(size, (p.text:GetStringWidth() or 0) + 8), size)
                     p.bg:SetVertexColor(rgb[1], rgb[2], rgb[3])
-                    p.tip = tip
+                    -- El actual con borde dorado grueso; los demás con borde negro fino.
+                    local e = isCur and 4 or 2
+                    p.edge:ClearAllPoints()
+                    p.edge:SetPoint("TOPLEFT", -e, e)
+                    p.edge:SetPoint("BOTTOMRIGHT", e, -e)
+                    if isCur then p.edge:SetVertexColor(1, 0.82, 0, 1) else p.edge:SetVertexColor(0, 0, 0, 0.9) end
+                    p.tip = (isCur and "|cffffd100Paso actual|r\n" or "") .. tip
                     p:Show()
+                end
+                if opt.mapPins ~= false then
+                    local p = Pin(pins, n)
+                    Style(p)
                     pcall(Pins.AddWorldMapIconMap, Pins, Guide, p, place.map, place.x / 100, place.y / 100, HBD_PINS_WORLDMAP_SHOW_PARENT or 1)
                 end
                 if n <= PINS_ON_MINIMAP and opt.miniPins ~= false then
                     local p = Pin(minis, n)
-                    p.text:SetText(k)
-                    p:SetSize(math.max(size, (p.text:GetStringWidth() or 0) + 8), size)
-                    p.bg:SetVertexColor(rgb[1], rgb[2], rgb[3])
-                    p.tip = tip
-                    p:Show()
-                    pcall(Pins.AddMinimapIconMap, Pins, Guide, p, place.map, place.x / 100, place.y / 100, true, k == cur)
+                    Style(p)
+                    pcall(Pins.AddMinimapIconMap, Pins, Guide, p, place.map, place.x / 100, place.y / 100, true, isCur)
                 end
-                if n >= PINS_ON_MAP then break end
+                if n >= limit then break end
             end
         end
     end

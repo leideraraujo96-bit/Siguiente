@@ -249,16 +249,20 @@ local function Build()
     y = y - 34
 
     -- Ruta
-    y = Header(y, "Ruta propia de Siguiente (sin Polestar)")
+    y = Header(y, "Mapa y ruta propia")
     y = Check(y, "Activar la ruta", "Si la apagas, la flecha apunta a la misión más cercana.",
         function() return ns.Route.enabled end,
         function(v) ns.Route.SetEnabled(v) end)
     y = Check(y, "Números en el mapa del mundo", "Círculos numerados: amarillo aceptar, naranja hacer, verde entregar, celeste viajar.",
         function() return opt.mapPins end,
-        function(v) opt.mapPins = v; ns.Route.DrawPins() end)
+        function(v) opt.mapPins = v; ns.Route.DrawPins(); if ns.Guide then ns.Guide.DrawPins() end end)
     y = Check(y, "Números en el minimapa", "Los próximos 3 pasos.",
         function() return opt.miniPins end,
-        function(v) opt.miniPins = v; ns.Route.DrawPins() end)
+        function(v) opt.miniPins = v; ns.Route.DrawPins(); if ns.Guide then ns.Guide.DrawPins() end end)
+    y = Slider(y, "Pasos en el mapa", "Cuántos pasos próximos se ven en el mapa además del actual (que va con borde dorado).",
+        0, 30, 1, Int,
+        function() return opt.mapPinCount or 8 end,
+        function(v) opt.mapPinCount = v; if ns.Guide then ns.Guide.DrawPins() end end)
     y = Check(y, "Llevarme a otra zona cuando rinda más",
         "Compara la XP por hora de cada zona (contando el viaje) y te manda a la mejor, con barco, zepelín o vuelo si hace falta.",
         function() return opt.autoTravel ~= false end,
