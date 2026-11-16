@@ -385,6 +385,25 @@ local function TravelSteps(fx, fy, finst, target, zoneMap, questCount, speed)
     return out
 end
 
+-- ¿La misión te saca de la zona? (objetivo o entrega en otra zona y a más de ~1500 yardas de donde se acepta)
+-- Ej.: "Boticaria Zamah" se acepta en El Cruce y se entrega en Cima del Trueno.
+local FAR_OTHER_ZONE = 1500
+local function LeavesZone(qid, start)
+    local zone = ZoneOf(start.uiMap)
+    local obj = Nearest(Places(qid, "obj"), start.wx, start.wy, start.inst)
+    local from = obj or start
+    local fin = Nearest(Places(qid, "finish"), from.wx, from.wy, from.inst)
+    for _, p in ipairs({ obj or false, fin or false }) do
+        if p then
+            if p.inst ~= start.inst then return true end
+            if ZoneOf(p.uiMap) ~= zone and Dist(start.wx, start.wy, p.wx, p.wy) > FAR_OTHER_ZONE then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 -- Tiempo estimado de una misión (segundos) para comparar cuáles rinden más.
 local function QuestSeconds(qid, sx, sy, sinst, speed)
     local obj = Nearest(Places(qid, "obj"), sx, sy, sinst)
@@ -471,6 +490,9 @@ function Route.Plan()
             local ok, quest = pcall(Q.DB.GetQuest, qid)
             if ok and quest and WorthAccepting(qid, quest, level, opt) then
                 local start = Nearest(Places(qid, "start"), px, py, pinst)
+                if start and LeavesZone(qid, start) then
+                    start = nil -- se hace o se entrega en otra zona lejos: no conviene aceptarla aquí
+                end
                 if start then
                     local hasObjectives = (quest.ObjectiveData and #quest.ObjectiveData > 0)
                         or type(quest.triggerEnd) == "table"
