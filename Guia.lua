@@ -12,6 +12,22 @@ local OBJECTIVE = { kill = true, collect = true, talk = true, interact = true, u
 local KIND = { accept = "accept", turnin = "turnin", ["goto"] = "travel", enter = "travel", fly = "travel",
     getfp = "travel", sethome = "travel" }
 
+-- Objetos que empiezan una misión: en el mismo paso hay "consigue X" (sin misión) y "acepta" con ese objeto.
+-- Se marcan para explicar "consíguelo y haz clic derecho en él".
+for _, g in pairs(ns.GUIAS or {}) do
+    for _, s in ipairs(g.steps or {}) do
+        local starters
+        for _, gl in ipairs(s.goals or {}) do
+            if gl.t == "accept" and gl.item then starters = starters or {}; starters[gl.item] = true end
+        end
+        if starters then
+            for _, gl in ipairs(s.goals) do
+                if gl.t == "collect" and not gl.quest and starters[gl.item] then gl.startsQuest = true end
+            end
+        end
+    end
+end
+
 ---------------------------------------------------------------------------
 -- Datos del personaje y nombres
 ---------------------------------------------------------------------------
@@ -554,7 +570,13 @@ function Guide.GoalText(goal)
         if not prog and goal.count and goal.count > 1 then prog = "0/" .. goal.count end
         return verb .. " " .. (what or "") .. (prog and ("  |cffffffff" .. prog .. "|r") or "")
     end
-    if t == "accept" then
+    if t == "accept" and goal.item then
+        -- Misión que empieza un objeto: clic derecho en él
+        return "Clic derecho en " .. (ItemName(goal) or "el objeto") .. " (en tus bolsas) para aceptar " .. QuestName(goal)
+    elseif t == "collect" and goal.startsQuest then
+        local where = goal.note and Text(goal.note)
+        return "Consigue " .. (ItemName(goal) or "") .. " |cff909090(empieza una misión" .. (where and ("; " .. where:lower()) or "") .. ")|r"
+    elseif t == "accept" then
         local who = NpcName(goal)
         return "Acepta " .. QuestName(goal) .. (who and (" · " .. who) or "")
     elseif t == "turnin" then
@@ -678,7 +700,7 @@ local function DetailLines(step, status, headline)
     for k, goal in ipairs(pend) do
         if k > 5 then break end
         if several then
-            local text = (goal.t == "accept" and ("Acepta " .. QuestName(goal)))
+            local text = (goal.t == "accept" and not goal.item and ("Acepta " .. QuestName(goal)))
                 or (goal.t == "turnin" and ("Entrega " .. QuestName(goal)))
                 or Guide.GoalText(goal)
             if goal.optional then text = text .. " |cff909090(opcional)|r" end
