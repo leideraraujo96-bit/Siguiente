@@ -12,17 +12,20 @@ local OBJECTIVE = { kill = true, collect = true, talk = true, interact = true, u
 local KIND = { accept = "accept", turnin = "turnin", ["goto"] = "travel", enter = "travel", fly = "travel",
     getfp = "travel", sethome = "travel" }
 
--- Objetos que empiezan una misión: en el mismo paso hay "consigue X" (sin misión) y "acepta" con ese objeto.
--- Se marcan para explicar "consíguelo y haz clic derecho en él".
+-- Objetos que empiezan una misión: en la ruta hay "consigue X" (sin misión) y "acepta" con ese objeto.
+-- Se marcan (con la misión que empiezan) para explicar "consíguelo y haz clic derecho en él", y para dar
+-- el "consigue" por hecho cuando ya aceptaste la misión (el juego se lleva el objeto al aceptarla).
 for _, g in pairs(ns.GUIAS or {}) do
+    local starters
     for _, s in ipairs(g.steps or {}) do
-        local starters
         for _, gl in ipairs(s.goals or {}) do
-            if gl.t == "accept" and gl.item then starters = starters or {}; starters[gl.item] = true end
+            if gl.t == "accept" and gl.item and gl.quest then starters = starters or {}; starters[gl.item] = gl.quest end
         end
-        if starters then
-            for _, gl in ipairs(s.goals) do
-                if gl.t == "collect" and not gl.quest and starters[gl.item] then gl.startsQuest = true end
+    end
+    if starters then
+        for _, s in ipairs(g.steps) do
+            for _, gl in ipairs(s.goals or {}) do
+                if gl.t == "collect" and not gl.quest and starters[gl.item] then gl.startsQuest = starters[gl.item] end
             end
         end
     end
@@ -340,6 +343,9 @@ local function GoalDone(i, gi, goal)
         return false
     end
     if t == "collect" and goal.item then
+        -- Un objeto que empieza una misión desaparece al aceptarla: si ya tienes (o hiciste) esa misión, está hecho
+        local sq = goal.startsQuest
+        if type(sq) == "number" and (ctx.inLog[sq] or Completed(sq)) then return true end
         return (GetItemCount and GetItemCount(goal.item) or 0) >= (goal.count or 1)
     end
     if t == "level" then return ctx.level >= (goal.level or 0) end
@@ -389,7 +395,8 @@ local function StepStatus(i, step)
         goals[gi] = { done = done, na = na == "na" }
         if na ~= "na" then
             -- Lo que falta es de una misión que tienes: entonces sí hay algo que hacer aquí aunque la ruta haya seguido.
-            if not done and goal.quest and ctx.inLog[goal.quest] and goal.t ~= "accept" then hasQuest = true end
+            -- (También una misión que acaba de desaparecer del diario: aún no se sabe si la entregaste o la abandonaste.)
+            if not done and goal.quest and (ctx.inLog[goal.quest] or ctx.pending[goal.quest]) and goal.t ~= "accept" then hasQuest = true end
             if TRAVEL[goal.t] then
                 -- En un viaje cuenta llegar al destino final: el último punto manda.
                 travelDone = done and true or false
@@ -470,7 +477,7 @@ function Guide.Evaluate()
     for q in pairs(inLog) do Guide.prevLog[q] = true end
 
     ctx = { P = Player(), level = UnitLevel("player"), inLog = inLog, opt = db.opt or {}, id = g.id,
-        lost = st.lost, lostAnswer = st.lostAnswer }
+        lost = st.lost, lostAnswer = st.lostAnswer, pending = Guide.pendingLost }
 
     local statuses, lastProgress = {}, 0
     local skips = st.skips[g.id] or {}
