@@ -4,7 +4,7 @@
 ## Notes-esMX: Ruta paso a paso, flecha y consejos para subir de nivel más rápido. Opciones en Opciones > AddOns > Siguiente.
 ## Notes-esES: Ruta paso a paso, flecha y consejos para subir de nivel más rápido. Opciones en Opciones > AddOns > Siguiente.
 ## Author: El Grumperto
-## Version: 0.8.4
+## Version: 0.8.5
 ## X-License: GPL-3.0-only
 ## IconTexture: Interface\Icons\INV_Misc_Map_01
 ## Category: Quests

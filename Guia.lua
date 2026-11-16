@@ -379,7 +379,9 @@ local function StepStatus(i, step)
                 travelOnly = false
                 local blocking = not (goal.optional) and goal.t ~= "note"
                 if blocking and not done then mainDone = false end
-                if done and goal.quest and (goal.t == "accept" or goal.t == "turnin" or OBJECTIVE[goal.t]) then
+                -- Prueba de que la ruta ya pasó por aquí: una misión ENTREGADA. Aceptar o adelantar
+                -- objetivos de algo de más adelante es normal y no debe hacerte saltar pasos.
+                if done and goal.quest and goal.t == "turnin" then
                     progress = true
                 end
             end
@@ -696,8 +698,9 @@ function Guide.Model(open, scroll, maxRows)
     m.note = step.note and Text(step.note)
     -- La primera frase de la explicación de la ruta, como pista (la explicación entera, al pasar el mouse)
     if m.note and #lines < 4 then
-        local hint = m.note:match("^(.-[%.:!?])%s") or m.note
-        if #hint > 140 then hint = hint:sub(1, 137) .. "..." end
+        -- La primera frase completa (termina en . ! ?), no cortada en ":"
+        local hint = m.note:match("^(.-[%.!?])%s") or m.note
+        if #hint > 160 then hint = hint:sub(1, 157) .. "..." end
         lines[#lines + 1] = "|cff909090" .. hint .. "|r"
     end
     m.detail = table.concat(lines, "\n")
