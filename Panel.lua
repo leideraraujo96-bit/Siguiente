@@ -412,7 +412,11 @@ function Panel.Render(tips)
     if m.num then
         local head = (m.viewing and "VIENDO PASO " or (m.focus and "PASO ELEGIDO " or "PASO ")) .. m.num
             .. (m.total and (" DE " .. m.total) or "")
-        if m.guideTitle then head = head .. "  ·  " .. m.guideTitle end
+        if m.guideTitle then
+            head = head .. "  ·  " .. m.guideTitle .. "  |cff80c0ff(Polestar)|r"
+        else
+            head = head .. "  |cff909090(ruta de Siguiente)|r"
+        end
         card.head:SetText(head)
         StyleCircle(card.circle, m.kind, GLYPH[m.kind] or "", false)
         card.circle:Show()

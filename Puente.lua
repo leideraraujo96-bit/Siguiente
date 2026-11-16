@@ -44,6 +44,22 @@ function Bridge.Installed()
     return PS() ~= nil
 end
 
+-- Por qué se usa (o no) la ruta de Polestar, en palabras simples (para /sig debug).
+function Bridge.Status()
+    local db = ns.GetDB and ns.GetDB()
+    if not _G.Polestar then return false, "Polestar no está instalado o no está activado" end
+    local P, E = PS()
+    if not P then return false, "esta versión de Polestar no tiene lo que Siguiente necesita" end
+    if db and db.opt and db.opt.usePolestar == false then return false, "la opción 'Usar la ruta de Polestar' está apagada" end
+    local guide = Try(E.GetGuide)
+    if not guide then return false, "Polestar no tiene una guía abierta (/polestar guides)" end
+    local at = Try(E.GetStepIndex)
+    if at and Try(E.GetStepView, at, true) == nil then
+        return false, "no se pudo leer el paso de Polestar: " .. tostring(Bridge.lastError)
+    end
+    return true, "conectado: " .. tostring(guide.title or guide.id) .. ", paso " .. tostring(at)
+end
+
 -- Tipo de paso (para el color del círculo): aceptar, entregar, viajar o hacer.
 local function KindOf(UI, view)
     local verb = Try(UI.FirstVerb, view) or "note"

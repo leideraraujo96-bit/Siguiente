@@ -1049,6 +1049,10 @@ SlashCmdList.SIGUIENTE = function(msg)
         print("  misiones en el diario:", #ReadQuests())
         print("  Questie conectado:", GetQuestie() and "sí" or "no",
             " flecha apunta a:", Arrow.target and Arrow.target.quest.title or (Arrow.status or "nada"))
+        if ns.Bridge then
+            local on, why = ns.Bridge.Status()
+            print("  ruta de Polestar:", on and ("|cff40ff40sí|r — " .. why) or ("|cffff8040no|r — " .. why))
+        end
         local missing = ns.Route and ns.Route.DebugMissing and ns.Route.DebugMissing() or {}
         print("  pasos sin lugar conocido:", #missing)
         for i = 1, math.min(5, #missing) do print("    " .. missing[i]) end
