@@ -91,9 +91,23 @@ end
 ---------------------------------------------------------------------------
 local placeCache = {}
 
+-- Mapa de un área de Questie; si es una subzona sin mapa propio, probamos con su zona padre.
+local function AreaMap(areaId)
+    local ok, uiMap = pcall(Q.ZoneDB.GetUiMapIdByAreaId, Q.ZoneDB, areaId)
+    if ok and uiMap then return uiMap end
+    if Q.ZoneDB.GetParentZoneId then
+        local ok2, parent = pcall(Q.ZoneDB.GetParentZoneId, Q.ZoneDB, areaId)
+        if ok2 and parent and parent ~= areaId then
+            local ok3, m = pcall(Q.ZoneDB.GetUiMapIdByAreaId, Q.ZoneDB, parent)
+            if ok3 then return m end
+        end
+    end
+    return nil
+end
+
 local function AddSpawns(out, spawns, name)
     for areaId, list in pairs(spawns or {}) do
-        local uiMap = type(list) == "table" and Q.ZoneDB:GetUiMapIdByAreaId(areaId)
+        local uiMap = type(list) == "table" and AreaMap(areaId)
         if uiMap then
             for _, c in ipairs(list) do
                 if type(c) == "table" and c[1] and c[2] and c[1] >= 0 and c[2] >= 0 then
@@ -108,10 +122,18 @@ local function AddSpawns(out, spawns, name)
 end
 
 local function AddNPCs(out, ids, friendlyOnly)
+    local before = #out
     for _, id in pairs(ids or {}) do
         local npc = Q.DB:GetNPC(id)
         if npc and npc.spawns and (not friendlyOnly or npc.friendly) then
             AddSpawns(out, npc.spawns, npc.name)
+        end
+    end
+    -- Si ninguno quedó por el filtro de "amistoso" (datos incompletos), los aceptamos igual.
+    if friendlyOnly and #out == before then
+        for _, id in pairs(ids or {}) do
+            local npc = Q.DB:GetNPC(id)
+            if npc and npc.spawns then AddSpawns(out, npc.spawns, npc.name) end
         end
     end
 end
@@ -425,8 +447,13 @@ function Route.Plan()
             inLog[q.id] = true
             Route.known[q.id] = true
             local d = ns.Difficulty(q.level, level)
-            local okGroup = not q.group or opt.allowGroup
-            if not Ignored(q.id) and not q.failed and (q.complete or (d ~= "rojo" and okGroup)) then
+            -- Mazmorra, élite o banda: fuera de la ruta yendo solo (se activan en opciones para ir en grupo).
+            local isGroup = q.group or QuestCheck("IsGroupQuest", q.id)
+            local isDungeon = QuestCheck("IsDungeonQuest", q.id)
+            local okGroup = (not isGroup or opt.allowGroup) and (not isDungeon or opt.allowDungeon)
+                and not QuestCheck("IsRaidQuest", q.id)
+            -- Si ya está completa (aunque sea de mazmorra), la entrega sí entra.
+            if not Ignored(q.id) and not q.failed and (q.complete or (okGroup and d ~= "rojo")) then
                 local stage = (q.complete or #q.objectives == 0) and "turnin" or "do"
                 local where = Nearest(Places(q.id, stage == "do" and "obj" or "finish"), px, py, pinst)
                 tasks[#tasks + 1] = {
@@ -546,10 +573,22 @@ function Route.Plan()
     local steps = {}
     local cx, cy, cinst = px, py, pinst
 
+    -- Pasos seguidos del mismo tipo en el mismo lugar (mismo NPC) comparten número: "Entrega 3 misiones a Thork".
+    local function SamePlace(a, b)
+        return a and b and a.uiMap == b.uiMap and math.abs(a.x - b.x) < 0.6 and math.abs(a.y - b.y) < 0.6
+    end
+    local function NextNum(kind, loc)
+        local prev = steps[#steps]
+        if prev and kind ~= "travel" and prev.kind == kind and SamePlace(prev.loc, loc) then
+            return prev.num
+        end
+        return (prev and prev.num or db.route.done) + 1
+    end
+
     -- 5. Viaje, si la mejor zona no es en la que estás
     if target and target.uiMap ~= here and target.arrive then
         for _, s in ipairs(TravelSteps(px, py, pinst, target.arrive, target.uiMap, target.n, speed)) do
-            s.num = db.route.done + #steps + 1
+            s.num = NextNum("travel", s.loc)
             s.qid = "viaje:" .. tostring(target.uiMap) .. ":" .. (s.sub or "")
             steps[#steps + 1] = s
         end
@@ -564,7 +603,7 @@ function Route.Plan()
     local function Emit(t, loc)
         steps[#steps + 1] = {
             kind = t.stage, qid = t.qid, title = t.title, level = t.level, loc = loc,
-            num = db.route.done + #steps + 1,
+            num = NextNum(t.stage, loc),
         }
         if loc and loc.inst == cinst then cx, cy = loc.wx, loc.wy end
         if t.stage == "accept" then
@@ -665,12 +704,28 @@ function Route.Sync()
             end
             if done then
                 s.done = true
-                db.route.done = db.route.done + 1
                 changed = true
             elseif s.kind == "accept" then
                 pendingAccept[s.qid] = true
             elseif s.kind ~= "travel" and not inLog[s.qid] and not pendingAccept[s.qid] then
                 Route.MarkDirty(0) -- la abandonaste
+            end
+        end
+    end
+
+    -- Un paso (grupo con el mismo número) cuenta como hecho cuando se completó todo lo que incluye.
+    if changed then
+        local all = {}
+        for _, s in ipairs(Route.steps) do
+            if all[s.num] == nil then all[s.num] = true end
+            if not s.done then all[s.num] = false end
+        end
+        for _, s in ipairs(Route.steps) do
+            if all[s.num] and not s.counted then
+                db.route.done = db.route.done + 1
+                for _, o in ipairs(Route.steps) do
+                    if o.num == s.num then o.counted = true end
+                end
             end
         end
     end
@@ -776,45 +831,103 @@ function Route.StepDetail(s)
     return (s.kind == "accept" and "con " or "a ") .. who
 end
 
-function Route.WindowText()
-    if not Route.enabled then return nil end
-    local cur = Route.Current()
-    if not cur then
-        return ns.Color("ffd100", "RUTA") .. "\n" .. ns.Color("c0c0c0", Route.status or "Calculando...")
-    end
-    local remaining = 0
-    for _, s in ipairs(Route.steps) do if not s.done then remaining = remaining + 1 end end
+---------------------------------------------------------------------------
+-- Pasos agrupados: lo que se muestra en pantalla (mismo número = un paso)
+---------------------------------------------------------------------------
+Route.KIND_HEX = KIND_HEX
+Route.KIND_RGB = KIND_RGB
 
-    local lines = { ns.Color("ffd100", "RUTA") .. ns.Color("909090", "  (" .. remaining .. " pasos por delante)") }
-    local shown = 0
+function Route.Groups()
+    local out, byNum = {}, {}
     for _, s in ipairs(Route.steps) do
-        if not s.done then
-            shown = shown + 1
-            if shown == 1 then
-                lines[#lines + 1] = ns.Color("ffffff", "Paso " .. s.num .. ". ") .. Route.StepTitle(s)
-                local detail = Route.StepDetail(s)
-                if detail then lines[#lines + 1] = "      " .. ns.Color("c0c0c0", detail) end
-            else
-                lines[#lines + 1] = ns.Color("909090", s.num .. ". " .. Route.PlainTitle(s))
-            end
-            if shown >= 5 then break end
+        local g = byNum[s.num]
+        if not g then
+            g = { num = s.num, kind = s.kind, steps = {}, done = true }
+            byNum[s.num] = g
+            out[#out + 1] = g
         end
+        g.steps[#g.steps + 1] = s
+        if not s.done then g.done = false end
     end
-    return table.concat(lines, "\n")
+    return out
+end
+
+-- El paso actual: el que elegiste con un clic (si sigue pendiente) o el primero sin hacer.
+function Route.CurrentGroup()
+    local groups = Route.Groups()
+    if Route.focusNum then
+        for _, g in ipairs(groups) do
+            if g.num == Route.focusNum and not g.done then return g, groups end
+        end
+        Route.focusNum = nil
+    end
+    for _, g in ipairs(groups) do
+        if not g.done then return g, groups end
+    end
+    return nil, groups
+end
+
+function Route.Focus(num)
+    Route.focusNum = num
+    Route.DrawPins()
+    if ns.RequestRefresh then ns.RequestRefresh() end
+    if ns.ArrowRescan then ns.ArrowRescan() end
+end
+
+function Route.LastNum()
+    local last = Route.steps[#Route.steps]
+    return last and last.num or 0
+end
+
+-- Texto de un paso agrupado: título, detalle (misiones u objetivos) y dónde.
+function Route.GroupText(g)
+    local live = {}
+    for _, s in ipairs(g.steps) do
+        if not s.done then live[#live + 1] = s end
+    end
+    if #live == 0 then live = g.steps end
+    local first = live[1]
+    local who = first.loc and first.loc.name
+    local title, detail
+    if g.kind == "travel" then
+        title, detail = first.title, first.detail
+    elseif #live == 1 then
+        title = KIND_TEXT[g.kind] .. ": " .. first.title
+        detail = Route.StepDetail(first)
+    else
+        if g.kind == "accept" then
+            title = "Acepta " .. #live .. " misiones" .. (who and (" de " .. who) or "")
+        elseif g.kind == "turnin" then
+            title = "Entrega " .. #live .. " misiones" .. (who and (" a " .. who) or "")
+        else
+            title = "Haz " .. #live .. " misiones aquí"
+        end
+        local parts = {}
+        for _, s in ipairs(live) do
+            parts[#parts + 1] = (g.kind == "do") and (Route.StepDetail(s) or s.title) or s.title
+        end
+        detail = table.concat(parts, " · ")
+    end
+    local where
+    if first.loc then
+        where = MapName(first.loc.uiMap) .. string.format(" (%.0f, %.0f)", first.loc.x, first.loc.y)
+    end
+    return title, detail, where
 end
 
 function Route.PrintList()
-    if not Route.Current() then
+    local cur, groups = Route.CurrentGroup()
+    if not cur then
         print("|cffffd100Siguiente|r: " .. (Route.status or "no hay ruta todavía."))
         return
     end
     print("|cffffd100Siguiente|r: próximos pasos")
     local shown = 0
-    for _, s in ipairs(Route.steps) do
-        if not s.done then
-            local detail = Route.StepDetail(s)
-            local where = s.loc and string.format(" (%.0f, %.0f)", s.loc.x, s.loc.y) or ""
-            print("  " .. s.num .. ". " .. Route.StepTitle(s) .. (detail and (" — " .. detail) or "") .. where)
+    for _, g in ipairs(groups) do
+        if not g.done then
+            local title, detail, where = Route.GroupText(g)
+            print("  " .. g.num .. ". " .. ns.Color(KIND_HEX[g.kind], title) .. (detail and (" — " .. detail) or "")
+                .. (where and (" — " .. where) or ""))
             shown = shown + 1
             if shown >= 30 then break end
         end
@@ -824,8 +937,13 @@ end
 -- Para la flecha: a dónde ir en el paso actual.
 function Route.ArrowTarget()
     if not Route.enabled then return nil end
-    local s = Route.Current()
-    if not s then return nil end
+    local g = Route.CurrentGroup()
+    if not g then return nil end
+    local s
+    for _, o in ipairs(g.steps) do
+        if not o.done then s = o break end
+    end
+    s = s or g.steps[1]
     local loc = s.loc and {
         x = s.loc.wx, y = s.loc.wy, inst = s.loc.inst, uiMap = s.loc.uiMap,
         mapX = s.loc.x, mapY = s.loc.y, name = s.loc.name,
@@ -836,12 +954,47 @@ function Route.ArrowTarget()
         local live = QQ and ns.LocateQuest(QQ, s.qid)
         if live then loc = live end
     end
+    local title = Route.GroupText(g)
     return {
         step = s,
+        group = g,
         loc = loc,
         quest = { id = s.qid, title = s.title, complete = s.kind == "turnin" },
-        heading = ns.Color("ffffff", "Paso " .. s.num .. ": ") .. Route.StepTitle(s),
+        heading = ns.Color("ffffff", "Paso " .. g.num .. ": ") .. ns.Color(KIND_HEX[g.kind], title),
     }
+end
+
+-- Saltar un paso agrupado entero.
+function Route.SkipGroup(g)
+    if not g then return end
+    if g.kind == "travel" then return Route.Skip(g.steps[1]) end
+    for _, s in ipairs(g.steps) do Route.ignored[s.qid] = GetTime() + 1800 end
+    local title = Route.GroupText(g)
+    print("|cffffd100Siguiente|r: salto \"" .. title .. "\" por 30 minutos.")
+    Route.focusNum = nil
+    Route.Plan()
+end
+
+-- Diagnóstico: pasos sin lugar conocido (para /sig debug).
+function Route.DebugMissing()
+    local out = {}
+    for _, s in ipairs(Route.steps) do
+        if not s.done and not s.loc and s.kind ~= "travel" then
+            local quest = Q and Q.DB.GetQuest(s.qid)
+            local ids = {}
+            local who = quest and ((s.kind == "accept" and quest.Starts and quest.Starts.NPC)
+                or (s.kind == "turnin" and quest.Finisher and quest.Finisher.NPC)) or {}
+            for _, id in pairs(who) do
+                local npc = Q.DB:GetNPC(id)
+                local areas = {}
+                for a in pairs(npc and npc.spawns or {}) do areas[#areas + 1] = tostring(a) .. "->" .. tostring(AreaMap(a)) end
+                ids[#ids + 1] = tostring(id) .. (npc and (" " .. tostring(npc.name) .. " amistoso=" .. tostring(npc.friendly)
+                    .. " áreas=" .. table.concat(areas, ",")) or " (no está en la base)")
+            end
+            out[#out + 1] = s.kind .. " " .. tostring(s.qid) .. " " .. tostring(s.title) .. " :: " .. table.concat(ids, " | ")
+        end
+    end
+    return out
 end
 
 ---------------------------------------------------------------------------
@@ -878,18 +1031,26 @@ local function MakePin(pool, i)
     return p
 end
 
-local function StylePin(p, group, isCurrent)
-    local first, last = group[1], group[#group]
-    local label = (#group > 1) and (first.num .. "-" .. last.num) or tostring(first.num)
+-- pin: lista de pasos agrupados que caen en el mismo lugar (ej.: entregar y aceptar con el mismo NPC = "3-4")
+local function StylePin(p, pin, isCurrent)
+    local first, last = pin[1], pin[#pin]
+    local label = (first.num ~= last.num) and (first.num .. "-" .. last.num) or tostring(first.num)
     local size = isCurrent and 24 or 18
     p.text:SetText(label)
     p:SetSize(math.max(size, (p.text:GetStringWidth() or 0) + 8), size)
     local rgb = KIND_RGB[first.kind]
     p.bg:SetVertexColor(rgb[1], rgb[2], rgb[3])
     p.tip = {}
-    for _, s in ipairs(group) do
-        local detail = Route.StepDetail(s)
-        p.tip[#p.tip + 1] = "Paso " .. s.num .. ": " .. Route.StepTitle(s) .. (detail and ("\n   " .. detail) or "")
+    for _, g in ipairs(pin) do
+        local title, detail = Route.GroupText(g)
+        p.tip[#p.tip + 1] = "Paso " .. g.num .. ": " .. ns.Color(KIND_HEX[g.kind], title)
+            .. (detail and ("\n   " .. detail) or "")
+    end
+end
+
+local function PinLoc(g)
+    for _, s in ipairs(g.steps) do
+        if not s.done and s.loc then return s.loc end
     end
 end
 
@@ -901,40 +1062,44 @@ function Route.DrawPins()
     for _, p in pairs(miniPins) do p:Hide() end
     if not Route.enabled then return end
 
-    -- Pasos seguidos en el mismo lugar van en un solo círculo ("4-6").
-    local groups = {}
-    local count = 0
-    for _, s in ipairs(Route.steps) do
-        if not s.done and s.loc then
-            count = count + 1
-            if count > PINS_ON_MAP then break end
-            local g = groups[#groups]
-            local prev = g and g[#g]
-            if prev and prev.loc.uiMap == s.loc.uiMap and math.abs(prev.loc.x - s.loc.x) < 0.5
-                and math.abs(prev.loc.y - s.loc.y) < 0.5 then
-                g[#g + 1] = s
+    -- Un círculo por lugar: pasos seguidos en el mismo sitio comparten círculo ("3-4").
+    logCache = ns.ReadQuests()
+    local pins = {}
+    local current = Route.CurrentGroup()
+    for _, g in ipairs(Route.Groups()) do
+        local loc = not g.done and PinLoc(g)
+        if loc then
+            if #pins >= PINS_ON_MAP then break end
+            local pin = pins[#pins]
+            local prev = pin and PinLoc(pin[#pin])
+            if prev and prev.uiMap == loc.uiMap and math.abs(prev.x - loc.x) < 0.6 and math.abs(prev.y - loc.y) < 0.6 then
+                pin[#pin + 1] = g
             else
-                groups[#groups + 1] = { s }
+                pins[#pins + 1] = { g, loc = loc }
             end
         end
     end
 
     local flag = HBD_PINS_WORLDMAP_SHOW_PARENT or 1
     local opt = (ns.GetDB() and ns.GetDB().opt) or {}
-    logCache = ns.ReadQuests()
-    for i, g in ipairs(groups) do
-        local loc = g[1].loc
+    for i, pin in ipairs(pins) do
+        local loc = pin.loc
+        local isCurrent = false
+        for _, g in ipairs(pin) do
+            if g == current or (current and g.num == current.num) then isCurrent = true end
+        end
+        local g = pin
         if opt.mapPins ~= false then
             local wp = MakePin(worldPins, i)
-            StylePin(wp, g, i == 1)
+            StylePin(wp, g, isCurrent)
             wp:Show()
             pcall(Q.Pins.AddWorldMapIconMap, Q.Pins, Route, wp, loc.uiMap, loc.x / 100, loc.y / 100, flag)
         end
         if i <= PINS_ON_MINIMAP and opt.miniPins ~= false then
             local mp = MakePin(miniPins, i)
-            StylePin(mp, g, i == 1)
+            StylePin(mp, g, isCurrent)
             mp:Show()
-            pcall(Q.Pins.AddMinimapIconMap, Q.Pins, Route, mp, loc.uiMap, loc.x / 100, loc.y / 100, true, i == 1)
+            pcall(Q.Pins.AddMinimapIconMap, Q.Pins, Route, mp, loc.uiMap, loc.x / 100, loc.y / 100, true, isCurrent)
         end
     end
     logCache = nil

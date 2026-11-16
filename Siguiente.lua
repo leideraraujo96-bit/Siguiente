@@ -20,6 +20,7 @@ ns.DEFAULTS = {
     allowOrange = false, -- incluir misiones naranjas (más XP, más difíciles)
     allowGroup = false,  -- incluir misiones de grupo (élite)
     allowDungeon = false,-- incluir misiones de mazmorra
+    listOpen = false,    -- lista completa de pasos abierta
 }
 local eventFrame = CreateFrame("Frame")
 
@@ -619,12 +620,46 @@ local function StatsText()
     return line1
 end
 
+-- Datos de experiencia para el panel (barra y su tooltip)
+function ns.XPInfo()
+    local level = UnitLevel("player")
+    local maxLevel = (GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion())
+        or (GetMaxPlayerLevel and GetMaxPlayerLevel()) or 60
+    if level >= maxLevel then return { level = level, max = true } end
+    local cur, max = UnitXP("player"), UnitXPMax("player")
+    local rested = GetXPExhaustion and GetXPExhaustion() or 0
+    local info = { level = level, cur = cur, maxXP = max, pct = max > 0 and cur / max or 0,
+        restedPct = (max > 0 and rested) and rested / max or 0, rested = rested, toGo = max - cur }
+    local elapsed = session.start and (GetTime() - session.start) or 0
+    if elapsed > 120 and session.gained > 0 then
+        info.perHour = session.gained / elapsed * 3600
+        info.eta = Duration((max - cur) / info.perHour * 3600)
+    end
+    local avg = AvgKillXP()
+    if avg then info.kills = math.ceil((max - cur) / avg) end
+    return info
+end
+
+function ns.XPLines()
+    local i = ns.XPInfo()
+    if i.max then return { "Nivel máximo" } end
+    local out = { string.format("%s / %s XP (faltan %s)", Num(i.cur), Num(i.maxXP), Num(i.toGo)) }
+    if i.rested and i.rested > 0 then out[#out + 1] = "Descanso: " .. Num(i.rested) .. " (doble XP al matar)" end
+    if i.perHour then out[#out + 1] = "XP por hora: " .. Num(i.perHour) .. " · subes en ~" .. i.eta end
+    if i.kills then out[#out + 1] = "Enemigos para subir: ~" .. Num(i.kills) end
+    return out
+end
+
 local function Refresh()
     if not db or not frame:IsShown() then return end
+    if ns.Panel and ns.Panel.ready then
+        ns.Panel.Render(BuildAdvice())
+        return
+    end
     stats:SetText(StatsText())
     local tips = BuildAdvice()
     local lines = {}
-    local routeText = ns.Route and ns.Route.WindowText()
+    local routeText = nil
     local maxTips = db.opt.maxTips or 4
     if routeText then
         lines[1] = routeText
@@ -779,7 +814,7 @@ end)
 -- Clic derecho: saltar esta misión por 10 minutos y apuntar a la siguiente.
 arrowFrame:SetScript("OnClick", function()
     if ns.Route and ns.Route.enabled then
-        ns.Route.Skip(ns.Route.Current())
+        ns.Route.SkipGroup((ns.Route.CurrentGroup()))
     elseif Arrow.target then
         Arrow.skip[Arrow.target.quest.id] = GetTime() + 600
         print("|cffffd100Siguiente|r: salto \"" .. Arrow.target.quest.title .. "\" por 10 minutos.")
@@ -924,6 +959,10 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1)
         end
         ns.ApplyLook()
         if ns.Options then ns.Options.Setup() end
+        if ns.Panel and not ns.Panel.ready then
+            ns.Panel.Init(frame, title, stats, body)
+            ns.Panel.ready = true
+        end
         if ns.Route then ns.Route.enabled = db.route.enabled ~= false end
         if db.pos then
             frame:ClearAllPoints()
@@ -1001,6 +1040,9 @@ SlashCmdList.SIGUIENTE = function(msg)
         print("  misiones en el diario:", #ReadQuests())
         print("  Questie conectado:", GetQuestie() and "sí" or "no",
             " flecha apunta a:", Arrow.target and Arrow.target.quest.title or (Arrow.status or "nada"))
+        local missing = ns.Route and ns.Route.DebugMissing and ns.Route.DebugMissing() or {}
+        print("  pasos sin lugar conocido:", #missing)
+        for i = 1, math.min(5, #missing) do print("    " .. missing[i]) end
     elseif msg == "ayuda" or msg == "help" then
         print("|cffffd100Siguiente|r comandos:")
         print("  /sig — mostrar u ocultar la ventana")
