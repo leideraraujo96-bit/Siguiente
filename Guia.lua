@@ -1095,6 +1095,11 @@ local function TickRaw()
     end
     Guide.Evaluate()
     local key = tostring(Guide.guide and Guide.guide.id) .. ":" .. tostring(Guide.current) .. ":" .. tostring(Guide.focus)
+    -- El lugar del paso cambia al completar parte de él (p. ej. ya tienes los cinturones, falta el mapa):
+    -- el número del mapa se mueve con la flecha.
+    local cur = Guide.focus or Guide.current
+    local place = cur and Guide.guide and StepPlace(Guide.guide.steps[cur], Guide.statuses[cur])
+    if place then key = key .. ":" .. tostring(place.map) .. ":" .. tostring(place.x) .. ":" .. tostring(place.y) end
     if key ~= lastCurrent then
         lastCurrent = key
         Guide.DrawPins()
