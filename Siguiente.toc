@@ -1,0 +1,21 @@
+## Interface: 16001
+## Title: Siguiente
+## Notes: Ruta paso a paso, flecha y consejos para subir de nivel más rápido. Opciones en Opciones > AddOns > Siguiente.
+## Notes-esMX: Ruta paso a paso, flecha y consejos para subir de nivel más rápido. Opciones en Opciones > AddOns > Siguiente.
+## Notes-esES: Ruta paso a paso, flecha y consejos para subir de nivel más rápido. Opciones en Opciones > AddOns > Siguiente.
+## Author: El Grumperto
+## Version: 0.4.1
+## IconTexture: Interface\Icons\INV_Misc_Map_01
+## Category: Quests
+## Category-esMX: Misiones
+## Category-esES: Misiones
+## DefaultState: enabled
+## OptionalDeps: Questie
+## SavedVariablesPerCharacter: SiguienteDB
+## AddonCompartmentFunc: Siguiente_OnCompartmentClick
+## AddonCompartmentFuncOnEnter: Siguiente_OnCompartmentEnter
+## AddonCompartmentFuncOnLeave: Siguiente_OnCompartmentLeave
+
+Siguiente.lua
+Ruta.lua
+Opciones.lua
