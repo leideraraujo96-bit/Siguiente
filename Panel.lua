@@ -112,7 +112,11 @@ local function GetRow(i, parent)
         local d = self.data
         if not d then return end
         if d.gindex then -- paso de las rutas incluidas
-            if button == "RightButton" then ns.Guide.Skip(d.gindex) elseif not d.done then ns.Guide.Focus(d.gindex) end
+            if d.skipped then ns.Guide.Unskip(d.gindex) -- un paso saltado: clic lo recupera
+            elseif button == "RightButton" then ns.Guide.Skip(d.gindex)
+            elseif d.done then ns.Guide.Reopen(d.gindex) -- "hecho"/"pasado": si no lo está, vuelve
+            else ns.Guide.Focus(d.gindex) end
+            if ns.RequestRefresh then ns.RequestRefresh() end
             return
         end
         if d.index then -- paso de Polestar
@@ -139,8 +143,14 @@ local function GetRow(i, parent)
             GameTooltip:AddLine(d.sub, 0.8, 0.8, 0.8, true)
         end
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("Clic: la flecha apunta a este paso", 1, 0.82, 0)
-        GameTooltip:AddLine("Clic derecho: saltar este paso", 1, 0.82, 0)
+        if d.skipped then
+            GameTooltip:AddLine("Clic: recuperar este paso (vuelve a la ruta)", 1, 0.82, 0)
+        elseif d.gindex and d.done then
+            GameTooltip:AddLine("Clic: volver a este paso si no lo hiciste", 1, 0.82, 0)
+        else
+            GameTooltip:AddLine("Clic: la flecha apunta a este paso", 1, 0.82, 0)
+            GameTooltip:AddLine("Clic derecho: saltar este paso", 1, 0.82, 0)
+        end
         GameTooltip:Show()
     end)
     r:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -266,19 +276,18 @@ function Panel.Init(frame, title, stats, body)
     P.card.groupText:SetWidth(INNER - 20)
     P.card.groupText:SetJustifyH("LEFT")
     P.card.groupText:Hide()
-    local function GroupButton(label, answer)
+    local function AskButton()
         local b = CreateFrame("Button", nil, P.card, "UIPanelButtonTemplate")
-        b:SetSize(110, 20)
-        b:SetText(label)
+        b:SetSize(130, 20)
         b:SetScript("OnClick", function(self)
-            if self.quest then ns.Bridge.AnswerGroup(self.quest, answer) end
+            if self.onClick then self.onClick() end
             if ns.RequestRefresh then ns.RequestRefresh() end
         end)
         b:Hide()
         return b
     end
-    P.card.skipBtn = GroupButton("Omitir", "skip")
-    P.card.doBtn = GroupButton("En grupo", "do")
+    P.card.skipBtn = AskButton() -- respuesta "sí"
+    P.card.doBtn = AskButton()   -- respuesta "no"
     P.card:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- Botón "Rutas" (mapa) junto al engranaje: elegir la ruta a seguir
@@ -307,6 +316,26 @@ function Panel.Init(frame, title, stats, body)
         scroll = 0
         if ns.Refresh then ns.Refresh() end
     end)
+
+    -- "Deshacer": aparece un minuto después de saltar un paso
+    P.undo = CreateFrame("Button", nil, frame)
+    P.undo:SetSize(110, 16)
+    P.undo.text = P.undo:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    P.undo.text:SetPoint("RIGHT", 0, 0)
+    P.undo.text:SetTextColor(1, 0.5, 0.25)
+    P.undo:SetScript("OnClick", function(self)
+        if self.k and ns.Guide then ns.Guide.Unskip(self.k) end
+        if ns.Refresh then ns.Refresh() end
+    end)
+    P.undo:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Deshacer el salto")
+        GameTooltip:AddLine("Vuelve a poner el paso " .. (self.k or "") .. " en la ruta.", 0.85, 0.85, 0.85, true)
+        GameTooltip:AddLine("Los pasos saltados también se ven en \"Ver todos los pasos\".", 0.85, 0.85, 0.85, true)
+        GameTooltip:Show()
+    end)
+    P.undo:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    P.undo:Hide()
 
     frame:EnableMouseWheel(true)
     frame:SetScript("OnMouseWheel", function(_, delta)
@@ -411,6 +440,7 @@ function Panel.Snapshot()
         head = P.card and P.card.head.text, title = P.card and P.card.title.text,
         detail = P.card and P.card.detail.text, where = P.card and P.card.where.text,
         toggle = P.toggle and P.toggle:IsShown() and P.toggle.text.text or nil,
+        undo = P.undo and P.undo:IsShown() and P.undo.text.text or nil,
         group = P.card and P.card.skipBtn:IsShown() and P.card.groupText.text or nil,
         rows = {}, tips = {},
     }
@@ -546,18 +576,31 @@ function Panel.Render(tips)
     local cardH = 26 + 4 + card.title:GetStringHeight() + 4 + card.detail:GetStringHeight() + 4
         + card.where:GetStringHeight() + 10
 
-    -- Misión de grupo (élite): Polestar pregunta si omitirla o hacerla en grupo
-    if m.group then
-        card.groupText:SetText("|cffff8040Misión de grupo:|r " .. (m.group.title or "") .. ". Necesita un grupo.")
+    -- Una pregunta con dos botones: misión abandonada (volver a tomarla / saltarla) o misión de grupo de Polestar
+    local ask = m.ask
+    if not ask and m.group then
+        local q = m.group.quest
+        ask = {
+            text = "|cffff8040Misión de grupo:|r " .. (m.group.title or "") .. ". Necesita un grupo.",
+            yes = "En grupo", no = "Omitir",
+            onYes = function() ns.Bridge.AnswerGroup(q, "do") end,
+            onNo = function() ns.Bridge.AnswerGroup(q, "skip") end,
+        }
+    end
+    if ask then
+        card.groupText:SetText(ask.text)
         card.groupText:ClearAllPoints()
         card.groupText:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -cardH + 4)
         card.groupText:Show()
         local gh = card.groupText:GetStringHeight()
+        -- skipBtn = la respuesta "sí" (a la izquierda), doBtn = la respuesta "no"
         card.skipBtn:ClearAllPoints()
         card.skipBtn:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -cardH - gh - 2)
         card.doBtn:ClearAllPoints()
         card.doBtn:SetPoint("LEFT", card.skipBtn, "RIGHT", 8, 0)
-        card.skipBtn.quest, card.doBtn.quest = m.group.quest, m.group.quest
+        card.skipBtn:SetText(ask.yes)
+        card.doBtn:SetText(ask.no)
+        card.skipBtn.onClick, card.doBtn.onClick = ask.onYes, ask.onNo
         card.skipBtn:Show()
         card.doBtn:Show()
         cardH = cardH + gh + 30
@@ -589,6 +632,22 @@ function Panel.Render(tips)
         y = y - rowH
     end
     for i = shown + 1, #rows do rows[i]:Hide() end
+
+    -- "Deshacer salto" en su propia línea, un minuto después de saltar
+    local undoK = ns.Guide and ns.Guide.Active() and ns.Guide.RecentSkip() or nil
+    if undoK then
+        P.undo.k = undoK
+        P.undo.text:SetText("« Deshacer salto del paso " .. undoK)
+        P.undo:SetWidth(INNER)
+        P.undo.text:ClearAllPoints()
+        P.undo.text:SetPoint("LEFT", 0, 0)
+        P.undo:ClearAllPoints()
+        P.undo:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, y - 4)
+        P.undo:Show()
+        y = y - 20
+    else
+        P.undo:Hide()
+    end
 
     -- Consejos como iconos + botón de la lista
     y = y - 6

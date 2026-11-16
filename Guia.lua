@@ -309,6 +309,8 @@ end
 local function GoalDone(i, gi, goal)
     if goal.only and not Matches(goal.only, ctx.P) then return true, "na" end
     local t, q = goal.t, goal.quest
+    -- Misión abandonada que decidiste saltar: la ruta se olvida de ella
+    if q and ctx.lostAnswer[q] == "skip" then return true, "na" end
     if t == "accept" then return (ctx.inLog[q] or Completed(q)) and true or false end
     if t == "turnin" then return Completed(q) end
     if t == "abandon" then return not ctx.inLog[q] end
@@ -417,7 +419,42 @@ function Guide.Evaluate()
 
     local inLog = {}
     for _, q in ipairs(ns.ReadQuests()) do if q.id then inLog[q.id] = q end end
-    ctx = { P = Player(), level = UnitLevel("player"), inLog = inLog, opt = db.opt or {}, id = g.id }
+
+    -- Misiones abandonadas: estaban en el diario, ya no están y no se entregaron.
+    -- Se espera un par de segundos para no confundir una entrega con un abandono.
+    st.lost = st.lost or {}
+    st.lostAnswer = st.lostAnswer or {}
+    Guide.pendingLost = Guide.pendingLost or {}
+    local now = GetTime()
+    -- Las que la propia guía te pide abandonar no cuentan como "abandonadas por error"
+    local planned = {}
+    for _, step in ipairs(g.steps) do
+        for _, goal in ipairs(step.goals or {}) do
+            if goal.t == "abandon" and goal.quest then planned[goal.quest] = true end
+        end
+    end
+    if Guide.prevLog then
+        for q in pairs(Guide.prevLog) do
+            if not inLog[q] and not Guide.pendingLost[q] and not planned[q] then Guide.pendingLost[q] = now end
+        end
+    end
+    for q, t in pairs(Guide.pendingLost) do
+        if inLog[q] or Completed(q) then
+            Guide.pendingLost[q] = nil
+        elseif now - t >= 2 then
+            Guide.pendingLost[q] = nil
+            st.lost[q] = true
+            st.lostAnswer[q] = nil
+        end
+    end
+    for q in pairs(st.lost) do
+        if inLog[q] or Completed(q) then st.lost[q] = nil end -- la volviste a tomar (o la entregaste)
+    end
+    Guide.prevLog = {}
+    for q in pairs(inLog) do Guide.prevLog[q] = true end
+
+    ctx = { P = Player(), level = UnitLevel("player"), inLog = inLog, opt = db.opt or {}, id = g.id,
+        lost = st.lost, lostAnswer = st.lostAnswer }
 
     local statuses, lastProgress = {}, 0
     local skips = st.skips[g.id] or {}
@@ -429,7 +466,20 @@ function Guide.Evaluate()
         if Applies(step) then
             local s = StepStatus(i, step)
             s.applies = true
-            if s.done then doneMemo[i] = true elseif doneMemo[i] then s.done = true end
+            -- ¿El paso toca una misión abandonada sin respuesta? Entonces no se da por hecho ni por pasado.
+            for _, goal in ipairs(step.goals or {}) do
+                if goal.quest and ctx.lost[goal.quest] and ctx.lostAnswer[goal.quest] ~= "skip" then
+                    s.lost = s.lost or goal.quest
+                end
+            end
+            if s.lost then
+                doneMemo[i] = nil
+                -- El paso donde se acepta vuelve a estar pendiente
+                for gi, goal in ipairs(step.goals or {}) do
+                    if goal.t == "accept" and goal.quest == s.lost then s.done = false; s.goals[gi].done = false end
+                end
+            end
+            if s.done then doneMemo[i] = true elseif doneMemo[i] and not s.lost then s.done = true end
             statuses[i] = s
             if s.progress then lastProgress = i end
         else
@@ -442,7 +492,7 @@ function Guide.Evaluate()
     for i, s in ipairs(statuses) do
         if s.applies and not s.done and not skips[i] then
             -- Pasos que quedaron atrás: si no tienes ninguna de sus misiones, la ruta ya siguió de largo.
-            if i < lastProgress and (s.travelOnly or not s.hasQuest) then
+            if i < lastProgress and (s.travelOnly or not s.hasQuest) and not s.lost then
                 s.behind = true
             else
                 current = i
@@ -628,7 +678,9 @@ local function DetailLines(step, status, headline)
     for k, goal in ipairs(pend) do
         if k > 5 then break end
         if several then
-            local text = (goal.t == "accept" or goal.t == "turnin") and QuestName(goal) or Guide.GoalText(goal)
+            local text = (goal.t == "accept" and ("Acepta " .. QuestName(goal)))
+                or (goal.t == "turnin" and ("Entrega " .. QuestName(goal)))
+                or Guide.GoalText(goal)
             if goal.optional then text = text .. " |cff909090(opcional)|r" end
             lines[#lines + 1] = "• " .. text
         end
@@ -692,6 +744,20 @@ function Guide.Model(open, scroll, maxRows)
     local step, status = g.steps[i], Guide.statuses[i]
     m.num = i
     m.focus = Guide.focus ~= nil
+    -- Abandonaste una misión de este paso: ¿volver a tomarla o saltarla?
+    local lostQ = status and status.lost
+    if lostQ and State().lostAnswer[lostQ] == nil then
+        local name = Name("quest", lostQ)
+        for _, gl in ipairs(step.goals or {}) do
+            if gl.quest == lostQ then name = name or gl.title end
+        end
+        m.ask = {
+            text = "|cffff8040Abandonaste|r «" .. (name or ("misión " .. lostQ)) .. "». ¿La vuelves a tomar?",
+            yes = "Volver a tomarla", no = "Saltarla",
+            onYes = function() Guide.AnswerLost(lostQ, "retake") end,
+            onNo = function() Guide.AnswerLost(lostQ, "skip") end,
+        }
+    end
     m.kind = StepKind(step, status)
     m.title = Headline(step, status)
     local lines = DetailLines(step, status, m.title)
@@ -723,15 +789,33 @@ function Guide.Model(open, scroll, maxRows)
         }
     end
     local skips = State().skips[g.id] or {}
+    local function markSkipped()
+        local row = m.rows[#m.rows]
+        row.skipped, row.done = true, true
+        row.sub = "|cffff8040saltado|r · clic para recuperarlo"
+    end
     if open then
         local skipped, shown = 0, 0
-        for k = math.max(1, (Guide.current or i) - 2), #g.steps do
+        local start = math.max(1, (Guide.current or i) - 2)
+        -- Pasos saltados más atrás (sin hacer): arriba de la lista, para que no se pierdan
+        if (scroll or 0) == 0 then
+            for k = 1, start - 1 do
+                local stt = Guide.statuses[k]
+                if skips[k] and stt and stt.applies and not stt.done then
+                    add(k, false) markSkipped()
+                    shown = shown + 1
+                end
+            end
+        end
+        for k = start, #g.steps do
             local stt = Guide.statuses[k]
-            if stt and stt.applies and not skips[k] then
+            if stt and stt.applies then
                 if skipped < scroll then
                     skipped = skipped + 1
                 else
                     add(k, k == i)
+                    -- Los pasos saltados también se ven, para poder recuperarlos con un clic
+                    if skips[k] then markSkipped() end
                     shown = shown + 1
                     if shown >= maxRows then break end
                 end
@@ -811,7 +895,23 @@ function Guide.Skip(i)
     st.skips[g.id] = st.skips[g.id] or {}
     st.skips[g.id][i] = true
     if Guide.focus == i then Guide.focus = nil end
-    print("|cffffd100Siguiente|r: salto el paso " .. i .. " (" .. (StepTitle(g.steps[i], Guide.statuses[i]) or "") .. ").")
+    Guide.lastSkip = { id = g.id, k = i, at = GetTime() }
+    print("|cffffd100Siguiente|r: salto el paso " .. i .. " (" .. (StepTitle(g.steps[i], Guide.statuses[i]) or "")
+        .. "). Para recuperarlo: botón Deshacer, o clic en él en \"Ver todos los pasos\".")
+    Guide.Evaluate()
+    Guide.DrawPins()
+    if ns.RequestRefresh then ns.RequestRefresh() end
+    if ns.ArrowRescan then ns.ArrowRescan() end
+end
+
+-- Respuesta a "abandonaste esta misión": "retake" (la vuelves a tomar) o "skip" (la ruta se olvida de ella)
+function Guide.AnswerLost(q, answer)
+    local st = State()
+    st.lostAnswer = st.lostAnswer or {}
+    st.lostAnswer[q] = answer
+    if answer == "skip" then
+        print("|cffffd100Siguiente|r: la ruta sigue sin esa misión.")
+    end
     Guide.Evaluate()
     Guide.DrawPins()
     if ns.RequestRefresh then ns.RequestRefresh() end
@@ -823,6 +923,43 @@ function Guide.NextGuide()
     local nextId = g and NextOf(g)
     if nextId then Guide.Set(nextId) end
     return nextId
+end
+
+-- Recuperar un paso saltado (vuelve a la ruta y la flecha va ahí)
+function Guide.Unskip(k)
+    local g = Guide.guide
+    if not (g and k) then return end
+    local st = State()
+    if st.skips[g.id] then st.skips[g.id][k] = nil end
+    if Guide.lastSkip and Guide.lastSkip.k == k then Guide.lastSkip = nil end
+    print("|cffffd100Siguiente|r: paso " .. k .. " recuperado.")
+    Guide.Evaluate()
+    if Guide.current ~= k then Guide.focus = k end
+    Guide.DrawPins()
+    if ns.RequestRefresh then ns.RequestRefresh() end
+    if ns.ArrowRescan then ns.ArrowRescan() end
+end
+
+-- Clic en un paso "hecho" o "pasado": si en realidad no está hecho, vuelve a la ruta y la flecha va ahí
+function Guide.Reopen(k)
+    local g = Guide.guide
+    if not (g and k) then return end
+    local st = State()
+    if st.done[g.id] then st.done[g.id][k] = nil end
+    Guide.Evaluate()
+    local s = Guide.statuses[k]
+    if s and s.done then
+        print("|cffffd100Siguiente|r: el paso " .. k .. " ya está hecho de verdad.")
+        return
+    end
+    Guide.Focus(k)
+end
+
+-- El último salto, si fue hace menos de un minuto (para el botón Deshacer)
+function Guide.RecentSkip()
+    local s = Guide.lastSkip
+    if s and Guide.guide and s.id == Guide.guide.id and GetTime() - s.at < 60 then return s.k end
+    return nil
 end
 
 function Guide.ResetSkips()
