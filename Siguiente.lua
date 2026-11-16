@@ -623,6 +623,18 @@ local function StatsText()
     return line1
 end
 
+-- Errores: se avisan en el chat una sola vez cada uno (para poder arreglarlos), sin romper nada.
+local reported = {}
+function ns.ReportError(where, err)
+    local msg = tostring(err or "?")
+    local key = where .. msg
+    if reported[key] then return end
+    reported[key] = true
+    ns.lastErrors = ns.lastErrors or {}
+    table.insert(ns.lastErrors, where .. ": " .. msg)
+    print("|cffff5050Siguiente: error en " .. where .. "|r — " .. msg .. "  |cff909090(mándale una foto a quien te hizo el addon)|r")
+end
+
 -- Datos de experiencia para el panel (barra y su tooltip)
 function ns.XPInfo()
     local level = UnitLevel("player")
@@ -656,7 +668,12 @@ end
 local function Refresh()
     if not db or not frame:IsShown() then return end
     if ns.Panel and ns.Panel.ready then
-        ns.Panel.Render(BuildAdvice())
+        -- Si algo falla al dibujar, la ventana no desaparece: avisa en el chat (una vez por error) y sigue.
+        local ok, err = pcall(function() ns.Panel.Render(BuildAdvice()) end)
+        if not ok then
+            ns.ReportError("ventana", err)
+            if frame:GetHeight() < 40 then frame:SetHeight(120) end
+        end
         return
     end
     stats:SetText(StatsText())

@@ -840,7 +840,7 @@ end
 -- Eventos: reevaluar cuando algo cambia (y cada segundo, para "llegar a un punto")
 ---------------------------------------------------------------------------
 local lastCurrent
-local function Tick()
+local function TickRaw()
     if not Guide.Active() then
         if lastCurrent ~= nil then lastCurrent = nil Guide.DrawPins() end
         return
@@ -853,6 +853,10 @@ local function Tick()
         if ns.RequestRefresh then ns.RequestRefresh() end
         if ns.ArrowRescan then ns.ArrowRescan() end
     end
+end
+local function Tick()
+    local ok, err = pcall(TickRaw)
+    if not ok and ns.ReportError then ns.ReportError("ruta", err) end
 end
 Guide.Tick = Tick
 
