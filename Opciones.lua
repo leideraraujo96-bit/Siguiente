@@ -193,8 +193,36 @@ local function Build()
         function() return opt.arrowScale end,
         function(v) opt.arrowScale = v; ns.ApplyLook() end)
 
+    -- Polestar
+    y = Header(y, "Ruta de Polestar")
+    y = Check(y, "Usar la ruta de Polestar (si está instalado)",
+        "Muestra en esta ventana la ruta de Polestar, optimizada para WoW Forever según tu raza, clase y facción. "
+        .. "Polestar sigue llevando la cuenta de los pasos y su flecha camina por caminos reales. "
+        .. "Sin Polestar, Siguiente usa su propia ruta.",
+        function() return opt.usePolestar ~= false end,
+        function(v)
+            opt.usePolestar = v
+            ns.Route.MarkDirty(0)
+            ns.Route.DrawPins()
+            ns.Refresh()
+        end)
+    local psBtn
+    psBtn = Button(20, y, 260, "Ocultar la ventana de Polestar",
+        "Deja solo la ventana de Siguiente. La flecha y las marcas del mapa de Polestar siguen. Vuelve a pulsar para mostrarla.",
+        function()
+            if not (ns.Bridge and ns.Bridge.Installed()) then
+                Say("Polestar no está instalado.")
+                return
+            end
+            local show = not ns.Bridge.PolestarWindowShown()
+            ns.Bridge.ShowPolestarWindow(show)
+            psBtn:SetText(show and "Ocultar la ventana de Polestar" or "Mostrar la ventana de Polestar")
+        end)
+    Options.psButton = psBtn
+    y = y - 34
+
     -- Ruta
-    y = Header(y, "Ruta paso a paso")
+    y = Header(y, "Ruta propia de Siguiente (sin Polestar)")
     y = Check(y, "Activar la ruta", "Si la apagas, la flecha apunta a la misión más cercana.",
         function() return ns.Route.enabled end,
         function(v) ns.Route.SetEnabled(v) end)
@@ -232,6 +260,9 @@ local function Build()
     panel:SetScript("OnShow", function()
         for _, w in ipairs(widgets) do w.Refresh() end
         moveBtn:SetText(ns.moveMode and "Terminar de mover" or "Mover ventana y flecha")
+        if ns.Bridge and ns.Bridge.Installed() then
+            psBtn:SetText(ns.Bridge.PolestarWindowShown() and "Ocultar la ventana de Polestar" or "Mostrar la ventana de Polestar")
+        end
     end)
 end
 

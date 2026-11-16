@@ -109,20 +109,31 @@ local function GetRow(i, parent)
     r.sub:SetWidth(INNER - 32)
     r.sub:SetJustifyH("LEFT")
     r:SetScript("OnClick", function(self, button)
-        if not self.group then return end
+        local d = self.data
+        if not d then return end
+        if d.index then -- paso de Polestar
+            if button == "RightButton" then ns.Bridge.Skip(d.index) else ns.Bridge.Goto(d.index) end
+            if ns.RequestRefresh then ns.RequestRefresh() end
+            return
+        end
         if button == "RightButton" then
-            ns.Route.SkipGroup(self.group)
-        elseif not self.group.done then
-            ns.Route.Focus(self.group.num)
+            ns.Route.SkipGroup(d.group)
+        elseif not d.done then
+            ns.Route.Focus(d.num)
         end
     end)
     r:SetScript("OnEnter", function(self)
-        if not self.group then return end
-        local title, detail, where = ns.Route.GroupText(self.group)
+        local d = self.data
+        if not d then return end
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:SetText("Paso " .. self.group.num .. ": " .. title, 1, 1, 1, 1, true)
-        if detail then GameTooltip:AddLine(detail, 0.8, 0.8, 0.8, true) end
-        if where then GameTooltip:AddLine(where, 0.6, 0.6, 0.6, true) end
+        GameTooltip:SetText("Paso " .. tostring(d.num) .. ": " .. (d.title or ""), 1, 1, 1, 1, true)
+        if d.group then
+            local _, detail, where = ns.Route.GroupText(d.group)
+            if detail then GameTooltip:AddLine(detail, 0.8, 0.8, 0.8, true) end
+            if where then GameTooltip:AddLine(where, 0.6, 0.6, 0.6, true) end
+        elseif d.sub and d.sub ~= "" then
+            GameTooltip:AddLine(d.sub, 0.8, 0.8, 0.8, true)
+        end
         GameTooltip:AddLine(" ")
         GameTooltip:AddLine("Clic: la flecha apunta a este paso", 1, 0.82, 0)
         GameTooltip:AddLine("Clic derecho: saltar este paso", 1, 0.82, 0)
@@ -217,16 +228,47 @@ function Panel.Init(frame, title, stats, body)
     P.card.where:SetPoint("TOPLEFT", P.card.detail, "BOTTOMLEFT", 0, -4)
     P.card.where:SetWidth(INNER - 54)
     P.card.where:SetJustifyH("LEFT")
-    P.card:SetScript("OnClick", function()
-        ns.Route.SkipGroup((ns.Route.CurrentGroup()))
+    P.card:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    P.card:SetScript("OnClick", function(_, button)
+        local polestar = ns.Bridge and ns.Bridge.Active()
+        if button == "RightButton" then
+            if polestar then ns.Bridge.Skip() else ns.Route.SkipGroup((ns.Route.CurrentGroup())) end
+        else
+            -- Clic: volver al paso actual si estabas mirando otro
+            if polestar then ns.Bridge.BackToLive() else ns.Route.Focus(nil) end
+        end
+        if ns.RequestRefresh then ns.RequestRefresh() end
     end)
     P.card:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("Paso actual", 1, 1, 1)
         GameTooltip:AddLine("La flecha te lleva aquí. Se marca solo al hacerlo.", 0.85, 0.85, 0.85, true)
+        if ns.Bridge and ns.Bridge.Active() then
+            GameTooltip:AddLine("Ruta de Polestar (optimizada para WoW Forever).", 0.6, 0.8, 1, true)
+        end
+        GameTooltip:AddLine("Clic: volver al paso actual", 1, 0.82, 0)
         GameTooltip:AddLine("Clic derecho: saltar este paso", 1, 0.82, 0)
         GameTooltip:Show()
     end)
+
+    -- Pregunta de misión de grupo (élite): Omitir / En grupo
+    P.card.groupText = P.card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    P.card.groupText:SetWidth(INNER - 20)
+    P.card.groupText:SetJustifyH("LEFT")
+    P.card.groupText:Hide()
+    local function GroupButton(label, answer)
+        local b = CreateFrame("Button", nil, P.card, "UIPanelButtonTemplate")
+        b:SetSize(110, 20)
+        b:SetText(label)
+        b:SetScript("OnClick", function(self)
+            if self.quest then ns.Bridge.AnswerGroup(self.quest, answer) end
+            if ns.RequestRefresh then ns.RequestRefresh() end
+        end)
+        b:Hide()
+        return b
+    end
+    P.card.skipBtn = GroupButton("Omitir", "skip")
+    P.card.doBtn = GroupButton("En grupo", "do")
     P.card:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- Botón de la lista completa
@@ -257,10 +299,11 @@ function Panel.Snapshot()
         head = P.card and P.card.head.text, title = P.card and P.card.title.text,
         detail = P.card and P.card.detail.text, where = P.card and P.card.where.text,
         toggle = P.toggle and P.toggle:IsShown() and P.toggle.text.text or nil,
+        group = P.card and P.card.skipBtn:IsShown() and P.card.groupText.text or nil,
         rows = {}, tips = {},
     }
     for _, r in ipairs(rows) do
-        if r:IsShown() then out.rows[#out.rows + 1] = { num = r.group and r.group.num, title = r.title.text, sub = r.sub.text } end
+        if r:IsShown() then out.rows[#out.rows + 1] = { num = r.data and r.data.num, title = r.title.text, sub = r.sub.text } end
     end
     for _, b in ipairs(tipButtons) do
         if b:IsShown() then out.tips[#out.tips + 1] = b.tip end
@@ -284,6 +327,50 @@ local function FirstLoc(g)
         if not s.done and s.loc then return s.loc end
     end
     return g.steps[1] and g.steps[1].loc
+end
+
+-- Lo que la ventana muestra, armado desde la ruta propia de Siguiente (mismo formato que Bridge.Model).
+function Panel.RouteModel(open, maxRows)
+    local Route = ns.Route
+    local m = { rows = {} }
+    local cur, groups = Route.CurrentGroup()
+    if not (Route.enabled and cur) then
+        m.title = Route.enabled and "Calculando la ruta..." or "Ruta apagada"
+        m.detail = Route.enabled and (Route.status or "") or "Actívala en Opciones > AddOns > Siguiente."
+        return m
+    end
+    local title, detail, where = Route.GroupText(cur)
+    local d = Distance(FirstLoc(cur))
+    m.kind, m.num, m.total, m.title, m.detail = cur.kind, cur.num, Route.LastNum(), title, detail
+    m.where = (where or "") .. (d and ((d < 15) and " · estás aquí" or (" · " .. ns.Num(d) .. " yd")) or "")
+    m.focus = Route.focusNum ~= nil
+    local list = {}
+    if open then
+        local doneShown = {}
+        for _, g in ipairs(groups) do
+            if g.done then doneShown[#doneShown + 1] = g end
+        end
+        for i = math.max(1, #doneShown - 1), #doneShown do list[#list + 1] = doneShown[i] end
+        for _, g in ipairs(groups) do
+            if not g.done then list[#list + 1] = g end
+        end
+        scroll = math.min(scroll, math.max(0, #list - maxRows))
+    else
+        for _, g in ipairs(groups) do
+            if not g.done and g ~= cur then list[#list + 1] = g end
+        end
+        scroll = 0
+    end
+    for i = 1 + scroll, math.min(#list, scroll + maxRows) do
+        local g = list[i]
+        local t, dt, wh = Route.GroupText(g)
+        m.rows[#m.rows + 1] = { group = g, num = g.num, kind = g.kind, title = t,
+            sub = g.done and "hecho" or (wh or dt or ""), done = g.done, current = g == cur }
+    end
+    local remaining = 0
+    for _, g in ipairs(groups) do if not g.done then remaining = remaining + 1 end end
+    m.remaining = remaining
+    return m
 end
 
 function Panel.Render(tips)
@@ -312,71 +399,68 @@ function Panel.Render(tips)
     P.bar.rested:SetWidth(math.max(1, INNER * math.min(1, (info.pct or 0) + (info.restedPct or 0))))
     y = y - 14
 
+    -- Qué mostrar: la ruta de Polestar (si está) o la propia de Siguiente
+    local open = db.opt.listOpen
+    local maxRows = open and LIST_ROWS or COMPACT_ROWS
+    local m = (ns.Bridge and ns.Bridge.Active() and ns.Bridge.Model(open, scroll, maxRows)) or Panel.RouteModel(open, maxRows)
+    P.model = m
+
     -- Paso actual
-    local cur, groups = Route.CurrentGroup()
     local card = P.card
     card:ClearAllPoints()
     card:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, y)
-    if Route.enabled and cur then
-        local title, detail, where = Route.GroupText(cur)
-        card.head:SetText((Route.focusNum and "PASO ELEGIDO " or "PASO ") .. cur.num .. " DE " .. Route.LastNum())
-        StyleCircle(card.circle, cur.kind, GLYPH[cur.kind] or "", false)
+    if m.num then
+        local head = (m.viewing and "VIENDO PASO " or (m.focus and "PASO ELEGIDO " or "PASO ")) .. m.num
+            .. (m.total and (" DE " .. m.total) or "")
+        if m.guideTitle then head = head .. "  ·  " .. m.guideTitle end
+        card.head:SetText(head)
+        StyleCircle(card.circle, m.kind, GLYPH[m.kind] or "", false)
         card.circle:Show()
-        card.title:SetText(title)
-        card.detail:SetText(detail or "")
-        local d = Distance(FirstLoc(cur))
-        local dist = d and ((d < 15) and " · estás aquí" or (" · " .. ns.Num(d) .. " yd")) or ""
-        card.where:SetText((where or "") .. dist)
     else
-        card.head:SetText("RUTA")
+        card.head:SetText(m.guideTitle or "RUTA")
         card.circle:Hide()
-        card.title:SetText(Route.enabled and "Calculando la ruta..." or "Ruta apagada")
-        card.detail:SetText(Route.enabled and (Route.status or "") or "Actívala en Opciones > AddOns > Siguiente.")
-        card.where:SetText("")
     end
+    card.title:SetText(m.title or "")
+    card.detail:SetText(m.detail or "")
+    card.where:SetText(m.where or (m.viewing and "Clic: volver al paso actual" or ""))
     local cardH = 26 + 4 + card.title:GetStringHeight() + 4 + card.detail:GetStringHeight() + 4
         + card.where:GetStringHeight() + 10
+
+    -- Misión de grupo (élite): Polestar pregunta si omitirla o hacerla en grupo
+    if m.group then
+        card.groupText:SetText("|cffff8040Misión de grupo:|r " .. (m.group.title or "") .. ". Necesita un grupo.")
+        card.groupText:ClearAllPoints()
+        card.groupText:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -cardH + 4)
+        card.groupText:Show()
+        local gh = card.groupText:GetStringHeight()
+        card.skipBtn:ClearAllPoints()
+        card.skipBtn:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -cardH - gh - 2)
+        card.doBtn:ClearAllPoints()
+        card.doBtn:SetPoint("LEFT", card.skipBtn, "RIGHT", 8, 0)
+        card.skipBtn.quest, card.doBtn.quest = m.group.quest, m.group.quest
+        card.skipBtn:Show()
+        card.doBtn:Show()
+        cardH = cardH + gh + 30
+    else
+        card.groupText:Hide()
+        card.skipBtn:Hide()
+        card.doBtn:Hide()
+    end
     cardH = math.max(56, cardH)
     card:SetHeight(cardH)
     y = y - cardH - 4
 
     -- Siguientes pasos (o la lista completa)
-    local list = {}
-    local open = db.opt.listOpen
-    if Route.enabled and cur then
-        if open then
-            local doneShown = {}
-            for _, g in ipairs(groups) do
-                if g.done then doneShown[#doneShown + 1] = g end
-            end
-            for i = math.max(1, #doneShown - 1), #doneShown do list[#list + 1] = doneShown[i] end
-            for _, g in ipairs(groups) do
-                if not g.done then list[#list + 1] = g end
-            end
-            scroll = math.min(scroll, math.max(0, #list - LIST_ROWS))
-        else
-            for _, g in ipairs(groups) do
-                if not g.done and g ~= cur then
-                    list[#list + 1] = g
-                    if #list >= COMPACT_ROWS then break end
-                end
-            end
-            scroll = 0
-        end
-    end
-    local maxRows = open and LIST_ROWS or COMPACT_ROWS
     local shown = 0
-    for i = 1 + scroll, math.min(#list, scroll + maxRows) do
+    for _, row in ipairs(m.rows) do
         shown = shown + 1
-        local g = list[i]
         local r = GetRow(shown, frame)
-        r.group = g
-        local title, detail, where = Route.GroupText(g)
-        StyleCircle(r.circle, g.kind, tostring(g.num), g.done)
-        r.title:SetText(title)
-        r.title:SetTextColor(g.done and 0.5 or 1, g.done and 0.5 or 1, g.done and 0.5 or 1)
-        r.sub:SetText(g.done and "hecho" or (where or detail or ""))
-        r.hl:SetShown(g == cur)
+        r.data = row
+        StyleCircle(r.circle, row.kind, tostring(row.num), row.done)
+        r.title:SetText(row.title or "")
+        r.title:SetTextColor(row.done and 0.5 or 1, row.done and 0.5 or 1, row.done and 0.5 or 1)
+        r.sub:SetText(row.sub or "")
+        r.hl:SetShown(row.current == true)
         local rowH = 8 + r.title:GetStringHeight() + 1 + r.sub:GetStringHeight()
         r:SetHeight(rowH)
         r:ClearAllPoints()
@@ -390,10 +474,11 @@ function Panel.Render(tips)
     y = y - 6
     local n = 0
     local maxTips = db.opt.maxTips or 4
+    local routeOn = Route.enabled or (ns.Bridge and ns.Bridge.Active())
     for _, tip in ipairs(tips or {}) do
         local icon = TipIcon(tip)
         if n >= maxTips then break end
-        if icon ~= "ruta" or not Route.enabled then
+        if icon ~= "ruta" or not routeOn then
             n = n + 1
             local b = GetTipButton(n, frame)
             b.icon:SetTexture(icon == "ruta" and "Interface\\Icons\\INV_Misc_Map_01" or icon)
@@ -409,9 +494,8 @@ function Panel.Render(tips)
 
     P.toggle:ClearAllPoints()
     P.toggle:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -10, y - 1)
-    local remaining = 0
-    for _, g in ipairs(groups or {}) do if not g.done then remaining = remaining + 1 end end
-    if Route.enabled and remaining > 1 then
+    local remaining = m.remaining or 0
+    if m.num and remaining > 1 then
         P.toggle.text:SetText(open and "Ver menos" or ("Ver todos los pasos (" .. remaining .. ")"))
         P.toggle:Show()
     else

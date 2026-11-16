@@ -688,6 +688,11 @@ end
 function Route.Sync()
     local db = ns.GetDB()
     if not db or not Route.enabled then return end
+    -- Con Polestar, la ruta es la suya: la propia descansa (sin números en el mapa).
+    if ns.Bridge and ns.Bridge.Active() then
+        if Route.pinsShown then Route.DrawPins() end
+        return
+    end
     if not GetQ() then
         Route.status = "La ruta necesita Questie activado."
         return
@@ -1082,7 +1087,10 @@ function Route.DrawPins()
     pcall(Q.Pins.RemoveAllMinimapIcons, Q.Pins, Route)
     for _, p in pairs(worldPins) do p:Hide() end
     for _, p in pairs(miniPins) do p:Hide() end
+    Route.pinsShown = false
     if not Route.enabled then return end
+    if ns.Bridge and ns.Bridge.Active() then return end
+    Route.pinsShown = true
 
     -- Un círculo por lugar: pasos seguidos en el mismo sitio comparten círculo ("3-4").
     logCache = ns.ReadQuests()

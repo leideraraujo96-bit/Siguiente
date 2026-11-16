@@ -4,13 +4,13 @@
 ## Notes-esMX: Ruta paso a paso, flecha y consejos para subir de nivel más rápido. Opciones en Opciones > AddOns > Siguiente.
 ## Notes-esES: Ruta paso a paso, flecha y consejos para subir de nivel más rápido. Opciones en Opciones > AddOns > Siguiente.
 ## Author: El Grumperto
-## Version: 0.6.1
+## Version: 0.7.0
 ## IconTexture: Interface\Icons\INV_Misc_Map_01
 ## Category: Quests
 ## Category-esMX: Misiones
 ## Category-esES: Misiones
 ## DefaultState: enabled
-## OptionalDeps: Questie
+## OptionalDeps: Questie, Polestar
 ## SavedVariablesPerCharacter: SiguienteDB
 ## AddonCompartmentFunc: Siguiente_OnCompartmentClick
 ## AddonCompartmentFuncOnEnter: Siguiente_OnCompartmentEnter
@@ -18,5 +18,6 @@
 
 Siguiente.lua
 Ruta.lua
+Puente.lua
 Panel.lua
 Opciones.lua

@@ -21,6 +21,7 @@ ns.DEFAULTS = {
     allowGroup = false,  -- incluir misiones de grupo (élite)
     allowDungeon = false,-- incluir misiones de mazmorra
     listOpen = false,    -- lista completa de pasos abierta
+    usePolestar = true,  -- si Polestar está instalado, usar su ruta
 }
 local eventFrame = CreateFrame("Frame")
 
@@ -924,10 +925,18 @@ function ns.ResetPositions()
 end
 
 local arrowAcc = 0
-arrowFrame:SetScript("OnUpdate", function(_, elapsed)
+arrowFrame:SetScript("OnUpdate", function(self, elapsed)
     arrowAcc = arrowAcc + elapsed
     if arrowAcc < 0.05 then return end
     arrowAcc = 0
+    -- Con la ruta de Polestar manda su flecha (camina por caminos reales): la nuestra se aparta.
+    if ns.Bridge and ns.Bridge.Active() and not ns.moveMode then
+        arrowTex:Hide()
+        arrowLabel:SetText("")
+        self:EnableMouse(false)
+        return
+    end
+    self:EnableMouse(true)
     local now = GetTime()
     if now >= Arrow.nextScan then
         Arrow.nextScan = now + 3

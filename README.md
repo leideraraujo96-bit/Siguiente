@@ -11,6 +11,10 @@ Addon para **World of Warcraft: Forever** que te dice qué hacer para subir de n
 
 Necesita **Questie**, porque de ahí saca dónde están las misiones.
 
+## Con Polestar
+
+Si tienes [Polestar](https://www.curseforge.com/wow/addons/polestar) instalado, Siguiente muestra **la ruta de Polestar** (optimizada para WoW Forever, por raza, clase y facción) en su propia ventana. Polestar lleva la cuenta de los pasos y su flecha camina por caminos reales; Siguiente solo la muestra. Siguiente no copia nada de Polestar: usa sus funciones mientras el juego corre. Se apaga en Opciones → AddOns → Siguiente → "Usar la ruta de Polestar". Sin Polestar, Siguiente usa su propia ruta.
+
 ## Comandos
 
 | Comando | Qué hace |
