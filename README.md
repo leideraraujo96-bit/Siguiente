@@ -3,6 +3,8 @@
 Addon para **World of Warcraft: Forever** que te dice qué hacer para subir de nivel más rápido:
 
 - **Ruta paso a paso**: acepta, haz, entrega. Avanza sola y se marca con números en el mapa y el minimapa.
+- **Elige la mejor zona** por XP por hora (contando el viaje) y te lleva: maestro de vuelo, barco o zepelín. Descarta misiones que rinden poco.
+- **Todas las clases, Alianza y Horda, cualquier nivel** (1 a 60). Opciones para incluir misiones naranjas, de grupo o de mazmorra.
 - **Flecha** que te lleva al paso actual.
 - **Consejos**: entrenador, talentos, bolsas, reparar, varita, zona adecuada para tu nivel.
 - **Opciones** en Opciones → AddOns → Siguiente (posición, tamaño, bloqueo, ruta).

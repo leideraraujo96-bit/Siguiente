@@ -22,9 +22,9 @@ local MAX_DIST = 3000      -- yardas: hasta dónde buscar misiones nuevas para a
 local PINS_ON_MAP = 50     -- pasos numerados en el mapa del mundo
 local PINS_ON_MINIMAP = 3  -- pasos en el minimapa
 
-local KIND_TEXT = { accept = "Acepta", ["do"] = "Haz", turnin = "Entrega" }
-local KIND_HEX = { accept = "ffd100", ["do"] = "ff8040", turnin = "40ff40" }
-local KIND_RGB = { accept = { 1, 0.82, 0 }, ["do"] = { 1, 0.5, 0.15 }, turnin = { 0.3, 1, 0.3 } }
+local KIND_TEXT = { accept = "Acepta", ["do"] = "Haz", turnin = "Entrega", travel = "Viaja" }
+local KIND_HEX = { accept = "ffd100", ["do"] = "ff8040", turnin = "40ff40", travel = "80c0ff" }
+local KIND_RGB = { accept = { 1, 0.82, 0 }, ["do"] = { 1, 0.5, 0.15 }, turnin = { 0.3, 1, 0.3 }, travel = { 0.45, 0.75, 1 } }
 
 ---------------------------------------------------------------------------
 -- Acceso a Questie (solo lectura)
@@ -182,20 +182,199 @@ local function Nearest(cands, x, y, inst)
     return best, (bestD == math.huge) and math.huge or math.sqrt(bestD)
 end
 
--- ¿Vale la pena aceptar esta misión yendo solo?
-local function WorthAccepting(qid, quest, level)
+local function QuestCheck(name, qid)
+    local fn = Q.DB[name]
+    if not fn then return false end
+    local ok, yes = pcall(fn, qid)
+    return ok and yes and true or false
+end
+
+-- ¿Vale la pena aceptar esta misión? Depende de las opciones (grupo, mazmorras, naranjas).
+local function WorthAccepting(qid, quest, level, opt)
     if quest.IsRepeatable then return false end
     if not ((quest.Starts and (quest.Starts.NPC or quest.Starts.GameObject))) then return false end
     local d = ns.Difficulty(quest.level or 0, level)
-    if d == "gris" or d == "rojo" or d == "naranja" then return false end
-    for _, check in ipairs({ "IsDungeonQuest", "IsRaidQuest", "IsPvPQuest", "IsGroupQuest" }) do
-        local fn = Q.DB[check]
-        if fn then
-            local ok, yes = pcall(fn, qid)
-            if ok and yes then return false end
+    if d == "gris" or d == "rojo" then return false end
+    if d == "naranja" and not opt.allowOrange then return false end
+    if QuestCheck("IsRaidQuest", qid) or QuestCheck("IsPvPQuest", qid) then return false end
+    if QuestCheck("IsDungeonQuest", qid) and not opt.allowDungeon then return false end
+    if QuestCheck("IsGroupQuest", qid) and not opt.allowGroup then return false end
+    return true
+end
+
+---------------------------------------------------------------------------
+-- Viajes: zonas, maestros de vuelo, barcos y zepelines
+---------------------------------------------------------------------------
+local QUEST_SECONDS = 240   -- tiempo medio de una misión yendo solo (aceptar, hacer, entregar)
+local DOCK_SECONDS = 240    -- esperar y hacer el viaje en barco o zepelín
+local FLY_SPEED = 30        -- yardas por segundo en un vuelo (aprox.)
+
+local function RunSpeed(level)
+    -- caminando ~7 yd/s; con montura (nivel 40) ~ +60%
+    return (level >= 40) and 11 or 7
+end
+
+-- Barcos y zepelines (coordenadas aproximadas de los muelles). Se pueden tomar en los dos sentidos.
+-- f: "A" Alianza, "H" Horda, "N" para todos.
+local TRANSPORTS = {
+    { f = "A", kind = "barco", a = { 1437, 4.6, 57.2, "Puerto de Menethil" }, b = { 1439, 32.4, 43.8, "Auberdine" } },
+    { f = "A", kind = "barco", a = { 1437, 5.0, 63.4, "Puerto de Menethil" }, b = { 1445, 71.6, 56.4, "Theramore" } },
+    { f = "H", kind = "zepelín", a = { 1411, 50.8, 13.8, "la torre de zepelines de Orgrimmar" }, b = { 1420, 60.7, 58.8, "la torre de zepelines de Entrañas" } },
+    { f = "H", kind = "zepelín", a = { 1411, 50.6, 12.6, "la torre de zepelines de Orgrimmar" }, b = { 1434, 31.6, 29.1, "Grom'gol" } },
+    { f = "H", kind = "zepelín", a = { 1420, 61.9, 59.0, "la torre de zepelines de Entrañas" }, b = { 1434, 31.6, 29.1, "Grom'gol" } },
+    { f = "N", kind = "barco", a = { 1434, 25.9, 73.1, "Bahía del Botín" }, b = { 1413, 63.7, 38.6, "Trinquete" } },
+}
+
+local function Spot(def)
+    local wx, wy, inst = Q.HBD:GetWorldCoordinatesFromZone(def[2] / 100, def[3] / 100, def[1])
+    if not wx then return nil end
+    return { uiMap = def[1], x = def[2], y = def[3], wx = wx, wy = wy, inst = inst, name = def[4] }
+end
+
+local function Dist(ax, ay, bx, by) return math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2) end
+
+-- Mejor barco/zepelín para ir de un continente a otro: devuelve muelle de salida, de llegada y el transporte.
+local function BestDock(fx, fy, finst, target)
+    local faction = UnitFactionGroup("player") == "Alliance" and "A" or "H"
+    local best, bestCost
+    for _, t in ipairs(TRANSPORTS) do
+        if t.f == "N" or t.f == faction then
+            for _, dir in ipairs({ { t.a, t.b }, { t.b, t.a } }) do
+                local from, to = Spot(dir[1]), Spot(dir[2])
+                if from and to and from.inst == finst and to.inst == target.inst then
+                    local cost = Dist(fx, fy, from.wx, from.wy) + Dist(to.wx, to.wy, target.wx, target.wy)
+                    if not bestCost or cost < bestCost then
+                        best, bestCost = { from = from, to = to, kind = t.kind }, cost
+                    end
+                end
+            end
         end
     end
-    return true
+    return best
+end
+
+-- Segundos aproximados para llegar de un punto a otro (caminando, o en barco si cambia el continente).
+local function TravelSeconds(fx, fy, finst, target, speed)
+    if finst == target.inst then
+        return Dist(fx, fy, target.wx, target.wy) / speed
+    end
+    local dock = BestDock(fx, fy, finst, target)
+    if not dock then return nil end
+    return (Dist(fx, fy, dock.from.wx, dock.from.wy) + Dist(dock.to.wx, dock.to.wy, target.wx, target.wy)) / speed
+        + DOCK_SECONDS
+end
+
+-- Maestros de vuelo amistosos (de la lista de Questie), con su lugar.
+local flightMasters
+local function FlightMasters()
+    if flightMasters then return flightMasters end
+    flightMasters = {}
+    local Townsfolk = QuestieLoader:ImportModule("Townsfolk")
+    local ids = Townsfolk and Townsfolk.townsfolk and Townsfolk.townsfolk["Flight Master"]
+    if type(ids) == "table" and #ids > 0 then
+        AddNPCs(flightMasters, ids, true)
+    else
+        flightMasters = nil -- Questie aún no armó la lista: reintentar luego
+        return {}
+    end
+    return flightMasters
+end
+
+-- ¿Conoces un vuelo hacia esta zona? (se aprende al abrir el mapa de vuelo de cualquier maestro)
+local function KnownNodeIn(zoneName)
+    local db = ns.GetDB()
+    if not (db and db.taxi and zoneName) then return nil end
+    for node in pairs(db.taxi) do
+        if node:find(zoneName, 1, true) then return node end
+    end
+    return nil
+end
+
+-- Zona (uiMapID de tipo zona) a la que pertenece un mapa.
+local function ZoneOf(uiMap)
+    local id = uiMap
+    for _ = 1, 6 do
+        local info = id and C_Map.GetMapInfo(id)
+        if not info then return uiMap end
+        if info.mapType == 3 then return id end
+        if info.mapType and info.mapType < 3 then return uiMap end
+        id = info.parentMapID
+    end
+    return uiMap
+end
+
+local function PlayerZone()
+    local m = C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+    return m and ZoneOf(m)
+end
+Route.PlayerZone = PlayerZone
+
+local function MapName(uiMap)
+    local info = uiMap and C_Map.GetMapInfo(uiMap)
+    return info and info.name or ("zona " .. tostring(uiMap))
+end
+
+-- Pasos para llegar a la zona elegida: barco o zepelín si hace falta, vuelo si lo conoces, y llegar.
+local function TravelSteps(fx, fy, finst, target, zoneMap, questCount, speed)
+    local out = {}
+    local zoneName = MapName(zoneMap)
+    local ax, ay, ainst = fx, fy, finst
+
+    if finst ~= target.inst then
+        local dock = BestDock(fx, fy, finst, target)
+        if dock then
+            out[#out + 1] = {
+                kind = "travel", sub = "dock", toInst = dock.to.inst, zone = zoneMap,
+                title = "Toma el " .. dock.kind .. " a " .. dock.to.name,
+                detail = "Ve a " .. dock.from.name .. " y sube al " .. dock.kind .. ".",
+                loc = dock.from,
+            }
+            ax, ay, ainst = dock.to.wx, dock.to.wy, dock.to.inst
+        else
+            out[#out + 1] = {
+                kind = "travel", sub = "zone", zone = zoneMap, title = "Viaja a " .. zoneName,
+                detail = "Está en otro continente.", loc = target,
+            }
+            return out
+        end
+    end
+
+    -- ¿Conviene volar? Solo si conoces un vuelo a esa zona y el camino es largo.
+    local walk = Dist(ax, ay, target.wx, target.wy)
+    local node = KnownNodeIn(zoneName)
+    if node and walk > 1200 then
+        local fm, fmDist = Nearest(FlightMasters(), ax, ay, ainst)
+        if fm and fmDist < walk * 0.5 then
+            out[#out + 1] = {
+                kind = "travel", sub = "fly", zone = zoneMap,
+                title = "Vuela a " .. node,
+                detail = "Habla con " .. (fm.name or "el maestro de vuelo") .. ".",
+                loc = fm,
+            }
+        end
+    end
+
+    out[#out + 1] = {
+        kind = "travel", sub = "zone", zone = zoneMap,
+        title = "Ve a " .. zoneName,
+        detail = questCount .. " misiones para tu nivel te esperan ahí.",
+        loc = target,
+    }
+    return out
+end
+
+-- Tiempo estimado de una misión (segundos) para comparar cuáles rinden más.
+local function QuestSeconds(qid, sx, sy, sinst, speed)
+    local obj = Nearest(Places(qid, "obj"), sx, sy, sinst)
+    local ox, oy = sx, sy
+    local t = 30
+    if obj then
+        t = t + Dist(sx, sy, obj.wx, obj.wy) / speed + 150
+        ox, oy = obj.wx, obj.wy
+    end
+    local fin = Nearest(Places(qid, "finish"), ox, oy, sinst)
+    if fin then t = t + Dist(ox, oy, fin.wx, fin.wy) / speed end
+    return t
 end
 
 ---------------------------------------------------------------------------
@@ -231,10 +410,13 @@ function Route.Plan()
     end
 
     local level = UnitLevel("player")
+    local opt = db.opt or {}
+    local speed = RunSpeed(level)
     local maxQ = (C_QuestLog and C_QuestLog.GetMaxNumQuestsCanAccept and C_QuestLog.GetMaxNumQuestsCanAccept())
         or MAX_QUESTLOG_QUESTS or 20
+    local here = PlayerZone()
 
-    -- 1. Lo que ya tienes en el diario
+    -- 1. Lo que ya tienes en el diario (con el lugar a donde hay que ir y su zona)
     local tasks, inLog = {}, {}
     local logQuests = ns.ReadQuests()
     Route.known = {}
@@ -243,41 +425,136 @@ function Route.Plan()
             inLog[q.id] = true
             Route.known[q.id] = true
             local d = ns.Difficulty(q.level, level)
-            if not Ignored(q.id) and not q.failed and (q.complete or (d ~= "rojo" and not q.group)) then
+            local okGroup = not q.group or opt.allowGroup
+            if not Ignored(q.id) and not q.failed and (q.complete or (d ~= "rojo" and okGroup)) then
+                local stage = (q.complete or #q.objectives == 0) and "turnin" or "do"
+                local where = Nearest(Places(q.id, stage == "do" and "obj" or "finish"), px, py, pinst)
                 tasks[#tasks + 1] = {
                     qid = q.id, title = q.title, level = q.level, xp = XPOf(q.id),
-                    stage = (q.complete or #q.objectives == 0) and "turnin" or "do",
+                    stage = stage, where = where, zone = where and ZoneOf(where.uiMap),
                 }
             end
         end
     end
     local logN = #logQuests
 
-    -- 2. Misiones disponibles cerca (los "!" de Questie)
+    -- 2. Todas las misiones disponibles para ti, en todas las zonas (los "!" de Questie)
     for qid in pairs(Q.Available.__availableQuests) do
         if not inLog[qid] and not Ignored(qid) and not IsDone(qid) then
             local ok, quest = pcall(Q.DB.GetQuest, qid)
-            if ok and quest and WorthAccepting(qid, quest, level) then
-                local _, dist = Nearest(Places(qid, "start"), px, py, pinst)
-                if dist <= ((db.opt and db.opt.maxDist) or MAX_DIST) then
+            if ok and quest and WorthAccepting(qid, quest, level, opt) then
+                local start = Nearest(Places(qid, "start"), px, py, pinst)
+                if start then
                     local hasObjectives = (quest.ObjectiveData and #quest.ObjectiveData > 0)
                         or type(quest.triggerEnd) == "table"
                     tasks[#tasks + 1] = {
                         qid = qid, title = quest.name or ("Misión " .. qid), level = quest.level or 0,
                         xp = XPOf(qid), stage = "accept", needDo = hasObjectives,
+                        where = start, zone = ZoneOf(start.uiMap),
                     }
                 end
             end
         end
     end
 
-    -- 3. Ordenar: siempre lo más cercano, con un empujón a entregar y a lo que da más XP
+    -- 3. ¿Qué zona rinde más XP por hora, contando el viaje?
+    local zones = {}
+    for _, t in ipairs(tasks) do
+        if t.where and t.zone then
+            local z = zones[t.zone]
+            if not z then
+                z = { uiMap = t.zone, xp = 0, n = 0, sx = 0, sy = 0, inst = t.where.inst, list = {} }
+                zones[t.zone] = z
+            end
+            if z.inst == t.where.inst then
+                z.xp = z.xp + (t.xp or 0)
+                z.n = z.n + 1
+                z.sx, z.sy = z.sx + t.where.wx, z.sy + t.where.wy
+                z.list[#z.list + 1] = t
+            end
+        end
+    end
+    local target, bestRate, hereRate
+    for map, z in pairs(zones) do
+        if z.n > 0 then
+            z.wx, z.wy = z.sx / z.n, z.sy / z.n
+            -- punto de llegada: la misión de esa zona más cercana al centro
+            local arrive = Nearest((function()
+                local l = {}
+                for _, t in ipairs(z.list) do l[#l + 1] = t.where end
+                return l
+            end)(), z.wx, z.wy, z.inst)
+            z.arrive = arrive
+            local travel = (map == here) and 0 or TravelSeconds(px, py, pinst, arrive, speed)
+            if travel then
+                z.rate = z.xp / (travel + z.n * QUEST_SECONDS)
+                if map == here then hereRate = z.rate end
+                -- Quedarse en la zona actual tiene ventaja: cambiar solo si otra rinde claramente más.
+                local rate = (map == here) and z.rate * 1.3 or z.rate
+                if z.n >= 3 or map == here then
+                    if not bestRate or rate > bestRate then bestRate, target = rate, z end
+                end
+            end
+        end
+    end
+    -- Sin viajes automáticos, o si saltaste el viaje: quedarse en la zona actual.
+    if opt.autoTravel == false or (Route.stayUntil and Route.stayUntil > GetTime()) then
+        if zones[here] then target = zones[here] end
+    end
+
+    -- Solo se planean las tareas de la zona elegida. Lo demás se planea al llegar.
+    local chosen = {}
+    if target then
+        local inChosen = {}
+        for _, t in ipairs(target.list) do
+            chosen[#chosen + 1] = t
+            inChosen[t] = true
+        end
+        -- Misiones del diario de zonas vecinas que quedan cerca (ej.: entregar en la ciudad de al lado).
+        local ref = target.arrive or { wx = px, wy = py, inst = pinst }
+        for _, t in ipairs(tasks) do
+            if not inChosen[t] and t.stage ~= "accept" and t.where and t.where.inst == ref.inst
+                and Dist(t.where.wx, t.where.wy, ref.wx, ref.wy) <= 1500 then
+                chosen[#chosen + 1] = t
+            end
+        end
+    end
+
+    -- 4. Descartar misiones que rinden poco para el tiempo que toman (XP por segundo muy bajo).
+    local rates = {}
+    for _, t in ipairs(chosen) do
+        if t.stage == "accept" then
+            t.rate = (t.xp or 0) / QuestSeconds(t.qid, t.where.wx, t.where.wy, t.where.inst, speed)
+            rates[#rates + 1] = t.rate
+        end
+    end
+    if #rates >= 4 then
+        table.sort(rates)
+        local median = rates[math.floor(#rates / 2) + 1]
+        local kept = {}
+        for _, t in ipairs(chosen) do
+            if t.stage ~= "accept" or t.rate >= median * 0.35 then kept[#kept + 1] = t end
+        end
+        chosen = kept
+    end
+    tasks = chosen
+
     local avgXP = 0
     for _, t in ipairs(tasks) do avgXP = avgXP + (t.xp or 0) end
     avgXP = math.max(1, avgXP / math.max(1, #tasks))
 
     local steps = {}
     local cx, cy, cinst = px, py, pinst
+
+    -- 5. Viaje, si la mejor zona no es en la que estás
+    if target and target.uiMap ~= here and target.arrive then
+        for _, s in ipairs(TravelSteps(px, py, pinst, target.arrive, target.uiMap, target.n, speed)) do
+            s.num = db.route.done + #steps + 1
+            s.qid = "viaje:" .. tostring(target.uiMap) .. ":" .. (s.sub or "")
+            steps[#steps + 1] = s
+        end
+        cx, cy, cinst = target.arrive.wx, target.arrive.wy, target.arrive.inst
+    end
 
     local function PlaceFor(t)
         local part = (t.stage == "accept" and "start") or (t.stage == "do" and "obj") or "finish"
@@ -335,7 +612,10 @@ function Route.Plan()
 
     Route.steps = steps
     Route.availSet = SnapshotAvailable()
-    Route.status = (#steps == 0) and "No hay misiones cerca para tu nivel: muévete a otra zona." or nil
+    Route.targetZone = target and target.uiMap
+    Route.status = (#steps == 0)
+        and "No quedan misiones buenas para tu nivel. Sube matando enemigos de tu nivel (mira los consejos de zona)."
+        or nil
     Route.DrawPins()
     if ns.RequestRefresh then ns.RequestRefresh() end
     if ns.ArrowRescan then ns.ArrowRescan() end
@@ -362,10 +642,21 @@ function Route.Sync()
 
     local changed = false
     local pendingAccept = {}
+    local zoneNow = PlayerZone()
+    local _, _, instNow = Q.HBD:GetPlayerWorldPosition()
     for _, s in ipairs(Route.steps) do
         if not s.done then
             local done
-            if s.kind == "accept" then
+            if s.kind == "travel" then
+                local arrived = zoneNow ~= nil and zoneNow == s.zone
+                if s.sub == "dock" then
+                    done = arrived or (instNow ~= nil and instNow == s.toInst)
+                elseif s.sub == "fly" then
+                    done = arrived or (UnitOnTaxi and UnitOnTaxi("player"))
+                else
+                    done = arrived
+                end
+            elseif s.kind == "accept" then
                 done = inLog[s.qid] or IsDone(s.qid)
             elseif s.kind == "do" then
                 done = complete[s.qid] or IsDone(s.qid)
@@ -378,7 +669,7 @@ function Route.Sync()
                 changed = true
             elseif s.kind == "accept" then
                 pendingAccept[s.qid] = true
-            elseif not inLog[s.qid] and not pendingAccept[s.qid] then
+            elseif s.kind ~= "travel" and not inLog[s.qid] and not pendingAccept[s.qid] then
                 Route.MarkDirty(0) -- la abandonaste
             end
         end
@@ -414,8 +705,14 @@ end
 
 function Route.Skip(step)
     if not step then return end
-    Route.ignored[step.qid] = GetTime() + 1800
-    print("|cffffd100Siguiente|r: salto \"" .. step.title .. "\" por 30 minutos.")
+    if step.kind == "travel" then
+        -- Saltar un viaje = quedarse en la zona actual un rato.
+        Route.stayUntil = GetTime() + 900
+        print("|cffffd100Siguiente|r: me quedo en esta zona 15 minutos antes de proponer otro viaje.")
+    else
+        Route.ignored[step.qid] = GetTime() + 1800
+        print("|cffffd100Siguiente|r: salto \"" .. step.title .. "\" por 30 minutos.")
+    end
     Route.Plan()
 end
 
@@ -450,11 +747,19 @@ local function LogQuest(qid)
     end
 end
 
+-- Título sin colores ("Acepta: X" o, en viajes, "Toma el barco a Y")
+function Route.PlainTitle(s)
+    if s.kind == "travel" then return s.title end
+    return KIND_TEXT[s.kind] .. ": " .. s.title
+end
+
 function Route.StepTitle(s)
+    if s.kind == "travel" then return ns.Color(KIND_HEX.travel, s.title) end
     return ns.Color(KIND_HEX[s.kind], KIND_TEXT[s.kind] .. ": ") .. s.title
 end
 
 function Route.StepDetail(s)
+    if s.kind == "travel" then return s.detail end
     if s.kind == "do" then
         local q = LogQuest(s.qid)
         if q then
@@ -490,7 +795,7 @@ function Route.WindowText()
                 local detail = Route.StepDetail(s)
                 if detail then lines[#lines + 1] = "      " .. ns.Color("c0c0c0", detail) end
             else
-                lines[#lines + 1] = ns.Color("909090", s.num .. ". " .. KIND_TEXT[s.kind] .. ": " .. s.title)
+                lines[#lines + 1] = ns.Color("909090", s.num .. ". " .. Route.PlainTitle(s))
             end
             if shown >= 5 then break end
         end
@@ -640,8 +945,33 @@ end
 ---------------------------------------------------------------------------
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "QUEST_LOG_UPDATE", "QUEST_ACCEPTED", "QUEST_TURNED_IN",
-    "QUEST_REMOVED", "PLAYER_LEVEL_UP" }) do
+    "QUEST_REMOVED", "PLAYER_LEVEL_UP", "TAXIMAP_OPENED", "ZONE_CHANGED_NEW_AREA" }) do
     pcall(ev.RegisterEvent, ev, e)
+end
+
+-- Al abrir el mapa de vuelo guardamos qué vuelos conoce este personaje (para proponer "vuela a X").
+local function RecordTaxiNodes()
+    local db = ns.GetDB()
+    if not db then return end
+    db.taxi = db.taxi or {}
+    if NumTaxiNodes and TaxiNodeName then
+        for i = 1, NumTaxiNodes() do
+            local kind = TaxiNodeGetType and TaxiNodeGetType(i)
+            if kind == "REACHABLE" or kind == "CURRENT" then
+                local name = TaxiNodeName(i)
+                if name then db.taxi[name] = true end
+            end
+        end
+    end
+    if C_TaxiMap and C_TaxiMap.GetAllTaxiNodes and C_Map and C_Map.GetBestMapForUnit then
+        local ok, nodes = pcall(C_TaxiMap.GetAllTaxiNodes, C_Map.GetBestMapForUnit("player"))
+        if ok and type(nodes) == "table" then
+            for _, n in ipairs(nodes) do
+                -- state: 0 = donde estás, 1 = alcanzable, 2 = no descubierto
+                if n.name and (n.state == 0 or n.state == 1) then db.taxi[n.name] = true end
+            end
+        end
+    end
 end
 
 local syncQueued = false
@@ -659,6 +989,12 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         Route.turnedIn[arg1] = true
     elseif event == "PLAYER_LEVEL_UP" then
         Route.MarkDirty(4)
+    elseif event == "TAXIMAP_OPENED" then
+        RecordTaxiNodes()
+        return
+    elseif event == "ZONE_CHANGED_NEW_AREA" then
+        QueueSync(1)
+        return
     elseif event == "PLAYER_ENTERING_WORLD" then
         Route.MarkDirty(5)
     end

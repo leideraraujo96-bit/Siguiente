@@ -16,9 +16,26 @@ ns.DEFAULTS = {
     arrowScale = 1,
     mapPins = true,      -- números en el mapa del mundo
     miniPins = true,     -- números en el minimapa
-    maxDist = 3000,      -- yardas para buscar misiones nuevas
+    autoTravel = true,   -- llevarte a otra zona cuando rinda más XP por hora
+    allowOrange = false, -- incluir misiones naranjas (más XP, más difíciles)
+    allowGroup = false,  -- incluir misiones de grupo (élite)
+    allowDungeon = false,-- incluir misiones de mazmorra
 }
 local eventFrame = CreateFrame("Frame")
+
+-- Rama de talentos recomendada para subir de nivel yendo solo, por clase.
+local CLASS_TIPS = {
+    WARRIOR = { spec = "Armas (Arms), con arma a dos manos" },
+    PALADIN = { spec = "Reprensión (Retribution), con arma a dos manos" },
+    HUNTER  = { spec = "Dominio de bestias (Beast Mastery)" },
+    ROGUE   = { spec = "Combate (Combat), con espadas" },
+    PRIEST  = { spec = "Sombras (Shadow): Spirit Tap primero" },
+    SHAMAN  = { spec = "Mejora (Enhancement), con arma a dos manos" },
+    MAGE    = { spec = "Escarcha (Frost)" },
+    WARLOCK = { spec = "Aflicción (Affliction)" },
+    DRUID   = { spec = "Combate feral (Feral), en forma de oso o felino" },
+}
+ns.CLASS_TIPS = CLASS_TIPS
 
 ---------------------------------------------------------------------------
 -- Zonas: [uiMapID] = { nivel mínimo, nivel máximo, facción, continente, nombre en inglés }
@@ -368,12 +385,14 @@ local function BuildAdvice()
             ". (Cuando vayas se borra solo, o escribe /sig entrene)")
     end
 
-    -- 4. Talentos sin usar
+    -- 4. Talentos sin usar (con la rama recomendada para subir solo según tu clase)
+    local _, class = UnitClass("player")
+    local info = CLASS_TIPS[class]
     if UnitCharacterPoints then
         local pts = UnitCharacterPoints("player")
         if pts and pts > 0 then
             Add(90, Color("ffd100", "Tienes " .. pts .. " punto(s) de talento sin usar.") ..
-                (select(2, UnitClass("player")) == "PRIEST" and " Para ir solo: rama Sombras (Spirit Tap primero)." or ""))
+                (info and (" Para subir solo: " .. info.spec .. ".") or ""))
         end
     end
 
@@ -386,11 +405,33 @@ local function BuildAdvice()
         Add(85, Color("ff3030", "Tu equipo está por romperse:") .. " repara en un herrero o vendedor.")
     end
 
-    -- 6. Varita (sacerdote)
-    local _, class = UnitClass("player")
-    if class == "PRIEST" and level >= 5 and INVSLOT_RANGED and _G.CharacterRangedSlot
+    -- 6. Cosas de cada clase
+    local hasRangedSlot = INVSLOT_RANGED and _G.CharacterRangedSlot
+    local busy = (InCombatLockdown and InCombatLockdown()) or (IsMounted and IsMounted())
+        or (UnitOnTaxi and UnitOnTaxi("player"))
+    if (class == "PRIEST" or class == "MAGE" or class == "WARLOCK") and level >= 5 and hasRangedSlot
         and not GetInventoryItemID("player", INVSLOT_RANGED) then
-        Add(80, Color("ffd100", "Equipa una varita:") .. " es tu mejor daño sin gastar maná (compra o pide a un encantador).")
+        Add(80, Color("ffd100", "Equipa una varita:") .. " es daño gratis sin gastar maná (compra o pide a un encantador).")
+    end
+    if class == "HUNTER" then
+        local ammo = GetInventoryItemCount and GetInventoryItemCount("player", 0) or nil
+        if hasRangedSlot and GetInventoryItemID("player", INVSLOT_RANGED) and ammo and ammo < 200 then
+            Add(84, Color("ff8040", "Te quedan " .. ammo .. " flechas/balas:") .. " compra munición en el próximo vendedor.")
+        end
+        if level >= 10 and not UnitExists("pet") and not busy then
+            Add(82, Color("ffd100", "Llama a tu mascota") .. " (o doma una): hace mucho daño y aguanta los golpes por ti.")
+        elseif UnitExists("pet") and GetPetHappiness and GetPetHappiness() == 1 then
+            Add(82, Color("ff8040", "Tu mascota está triste:") .. " dale de comer; si no, pega menos y puede abandonarte.")
+        end
+    end
+    if class == "WARLOCK" and level >= 2 and not UnitExists("pet") and not busy then
+        Add(82, Color("ffd100", "Invoca a tu demonio:") .. " el diablillo al principio y el abisario (Voidwalker) desde nivel 10 para ir solo.")
+    end
+    if class == "ROGUE" and level >= 20 and GetWeaponEnchantInfo then
+        local hasMain = GetWeaponEnchantInfo()
+        if not hasMain then
+            Add(78, Color("ffd100", "Ponle veneno a tus armas") .. " (desde nivel 20, tras la misión de venenos): mucho más daño.")
+        end
     end
 
     -- 7. Zona actual vs tu nivel

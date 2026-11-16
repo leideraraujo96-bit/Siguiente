@@ -198,16 +198,26 @@ local function Build()
     y = Check(y, "Activar la ruta", "Si la apagas, la flecha apunta a la misión más cercana.",
         function() return ns.Route.enabled end,
         function(v) ns.Route.SetEnabled(v) end)
-    y = Check(y, "Números en el mapa del mundo", "Círculos numerados: amarillo aceptar, naranja hacer, verde entregar.",
+    y = Check(y, "Números en el mapa del mundo", "Círculos numerados: amarillo aceptar, naranja hacer, verde entregar, celeste viajar.",
         function() return opt.mapPins end,
         function(v) opt.mapPins = v; ns.Route.DrawPins() end)
     y = Check(y, "Números en el minimapa", "Los próximos 3 pasos.",
         function() return opt.miniPins end,
         function(v) opt.miniPins = v; ns.Route.DrawPins() end)
-    y = Slider(y, "Distancia para buscar misiones", "Hasta dónde mira para meter misiones nuevas en la ruta. Más lejos = más misiones, más caminata.",
-        1000, 6000, 250, Yards,
-        function() return opt.maxDist end,
-        function(v) opt.maxDist = v; ns.Route.MarkDirty(1) end)
+    y = Check(y, "Llevarme a otra zona cuando rinda más",
+        "Compara la XP por hora de cada zona (contando el viaje) y te manda a la mejor, con barco, zepelín o vuelo si hace falta.",
+        function() return opt.autoTravel ~= false end,
+        function(v) opt.autoTravel = v; ns.Route.MarkDirty(0) end)
+    y = Check(y, "Incluir misiones naranjas", "Dan más XP pero son más difíciles yendo solo.",
+        function() return opt.allowOrange end,
+        function(v) opt.allowOrange = v; ns.Route.MarkDirty(0) end)
+    y = Check(y, "Incluir misiones de grupo (élite)", "Actívalo cuando juegues en grupo con amigos.",
+        function() return opt.allowGroup end,
+        function(v) opt.allowGroup = v; ns.Route.MarkDirty(0) end)
+    y = Check(y, "Incluir misiones de mazmorra", "Las que se hacen dentro de una mazmorra, para cuando vayas en grupo.",
+        function() return opt.allowDungeon end,
+        function(v) opt.allowDungeon = v; ns.Route.MarkDirty(0) end)
+    y = y - 6
     Button(20, y, 200, "Empezar desde el paso 1", "Borra el contador y vuelve a calcular la ruta.",
         function()
             ns.Route.Reset()
