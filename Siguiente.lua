@@ -561,9 +561,31 @@ local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", 2, 2)
 close:SetScale(0.8)
 close:SetScript("OnClick", function()
+    db.hidden = true -- primero: así el vigilante de abajo sabe que la cerraste tú
     frame:Hide()
-    db.hidden = true
     print("|cffffd100Siguiente|r oculto. Escribe /sig para volver a verlo.")
+end)
+
+-- Vigilante: si algo que no eres tú oculta la ventana (otro addon, un vuelo...), vuelve a mostrarla
+-- y dice una vez quién fue, para poder arreglarlo de raíz.
+local toldWho = {}
+frame:HookScript("OnHide", function(self)
+    if not db or db.hidden or ns.moveMode then return end
+    if not UIParent:IsShown() then return end -- Alt+Z oculta toda la interfaz: eso es tuyo
+    local stack = debugstack and debugstack(2, 6, 0) or ""
+    local who = stack:match("AddOns[/\\]([^/\\]+)") or "el juego"
+    if who == "Siguiente" then who = stack:match("AddOns[/\\]Siguiente.-AddOns[/\\]([^/\\]+)") or "el juego" end
+    if not toldWho[who] then
+        toldWho[who] = true
+        print("|cffffd100Siguiente|r: " .. who .. " ocultó la ventana sin que la cerraras. La vuelvo a mostrar."
+            .. " |cff909090(si pasa seguido, mándale esto a quien te hizo el addon)|r")
+    end
+    C_Timer.After(0.2, function()
+        if db and not db.hidden and not self:IsShown() then
+            self:Show()
+            if ns.Refresh then ns.Refresh() end
+        end
+    end)
 end)
 
 -- Engranaje: abre Opciones > AddOns > Siguiente
