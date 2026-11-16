@@ -474,11 +474,33 @@ local function QuestName(goal) return Name("quest", goal.quest) or goal.title or
 local function NpcName(goal) return (goal.npc and Name("npc", goal.npc)) or goal.npcName end
 local function ItemName(goal) return (goal.item and Name("item", goal.item)) or goal.itemName end
 
+-- Progreso de un objetivo según tu diario ("0/1") y el nombre de lo que pide ("Jarra de agua").
+local function Progress(goal)
+    if not (goal.quest and goal.oi and ctx and ctx.inLog[goal.quest]) then return nil, nil end
+    local o = ctx.inLog[goal.quest].objectives[goal.oi]
+    if not (o and o.text) then return nil, nil end
+    local prog = o.text:match("(%d+%s*/%s*%d+)")
+    local thing = o.text:gsub("%d+%s*/%s*%d+", ""):gsub("^[%s:]+", ""):gsub("[%s:]+$", "")
+    return prog, (thing ~= "" and thing or nil)
+end
+Guide.Progress = Progress
+
 function Guide.GoalText(goal)
     local t = goal.t
-    if goal.quest and OBJECTIVE[t] and ctx and ctx.inLog[goal.quest] and goal.oi then
-        local o = ctx.inLog[goal.quest].objectives[goal.oi]
-        if o and o.text and o.text ~= "" then return o.text end
+    -- Objetivos de misión: verbo + qué + progreso ("Consigue Jarra de agua 0/1")
+    if goal.quest and OBJECTIVE[t] then
+        local prog, thing = Progress(goal)
+        local verb, what
+        if t == "kill" then verb, what = "Mata a", NpcName(goal) or goal.target or thing
+        elseif t == "collect" then verb, what = "Consigue", ItemName(goal) or thing
+        elseif t == "talk" then verb, what = "Habla con", NpcName(goal) or thing
+        elseif t == "interact" then verb, what = "Usa", (goal.object and Name("object", goal.object)) or goal.objName or thing
+        elseif t == "use" then verb, what = "Usa", ItemName(goal) or thing
+        elseif t == "explore" or t == "enter" then verb, what = "Explora", thing or (goal.text and Text(goal.text))
+        elseif t == "escort" then verb, what = "Escolta a", NpcName(goal) or thing
+        else verb, what = "Completa", thing or QuestName(goal) end
+        if not prog and goal.count and goal.count > 1 then prog = "0/" .. goal.count end
+        return verb .. " " .. (what or "") .. (prog and ("  |cffffffff" .. prog .. "|r") or "")
     end
     if t == "accept" then
         local who = NpcName(goal)
@@ -554,6 +576,71 @@ end
 
 local CHECK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:12|t "
 
+-- Objetivos pendientes del paso (sin notas), en orden.
+local function Pending(step, status)
+    local out, done = {}, 0
+    for gi, goal in ipairs(step.goals or {}) do
+        local gs = status and status.goals and status.goals[gi]
+        if not (gs and gs.na) and goal.t ~= "note" then
+            if gs and gs.done then done = done + 1 else out[#out + 1] = goal end
+        end
+    end
+    return out, done
+end
+
+local function Plain(s) return (tostring(s or ""):gsub("|T.-|t", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+
+-- Lo que tienes que hacer ahora en este paso, en una frase ("Consigue Jarra de agua 0/1", "Acepta 3 misiones de Thork").
+local function Headline(step, status)
+    local pend = Pending(step, status)
+    if #pend == 0 then return StepTitle(step, status) end
+    local first = pend[1]
+    -- Varias misiones para aceptar o entregar seguidas: una sola frase
+    if first.t == "accept" or first.t == "turnin" then
+        local same, npc = 0, first.npc
+        for _, gl in ipairs(pend) do
+            if gl.t == first.t then
+                same = same + 1
+                if gl.npc ~= npc then npc = nil end
+            end
+        end
+        if same > 1 then
+            local who = npc and NpcName(first)
+            if first.t == "accept" then return "Acepta " .. same .. " misiones" .. (who and (" de " .. who) or "") end
+            return "Entrega " .. same .. " misiones" .. (who and (" a " .. who) or "")
+        end
+    end
+    return Guide.GoalText(first)
+end
+Guide.Headline = Headline
+
+-- Las líneas debajo del título: qué falta (con su misión), lo hecho resumido y la pista de la ruta.
+local function DetailLines(step, status, headline)
+    local pend, doneCount = Pending(step, status)
+    local lines = {}
+    local title = Text(step.title or "")
+    if title ~= "" and Plain(title) ~= Plain(headline) then
+        lines[#lines + 1] = "|cffc8b88a" .. title .. "|r"
+    end
+    local several = #pend > 1
+    for k, goal in ipairs(pend) do
+        if k > 5 then break end
+        if several then
+            local text = (goal.t == "accept" or goal.t == "turnin") and QuestName(goal) or Guide.GoalText(goal)
+            if goal.optional then text = text .. " |cff909090(opcional)|r" end
+            lines[#lines + 1] = "• " .. text
+        end
+        -- La misión a la que pertenece un objetivo (si no se ve ya)
+        if goal.quest and OBJECTIVE[goal.t] and not several then
+            lines[#lines + 1] = "|cffa0a0a0Misión:|r " .. QuestName(goal)
+        end
+    end
+    if doneCount > 0 then
+        lines[#lines + 1] = CHECK .. "|cff909090" .. doneCount .. (doneCount == 1 and " hecho" or " hechos") .. "|r"
+    end
+    return lines
+end
+
 -- Objetivos del paso: primero lo que falta, después lo ya hecho (con su marca).
 local function GoalLines(step, status, max)
     local todo, done = {}, {}
@@ -604,21 +691,20 @@ function Guide.Model(open, scroll, maxRows)
     m.num = i
     m.focus = Guide.focus ~= nil
     m.kind = StepKind(step, status)
-    m.title = StepTitle(step, status)
-    local lines = GoalLines(step, status, 5)
-    local plainTitle = m.title
-    if lines[1] and lines[1]:gsub("|T.-|t", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") == plainTitle then
-        table.remove(lines, 1)
-    end
+    m.title = Headline(step, status)
+    local lines = DetailLines(step, status, m.title)
     m.note = step.note and Text(step.note)
     -- La primera frase de la explicación de la ruta, como pista (la explicación entera, al pasar el mouse)
-    if m.note and #lines < 3 then
+    if m.note and #lines < 4 then
         local hint = m.note:match("^(.-[%.:!?])%s") or m.note
         if #hint > 140 then hint = hint:sub(1, 137) .. "..." end
-        lines[#lines + 1] = "|cffc8b88a" .. hint .. "|r"
+        lines[#lines + 1] = "|cff909090" .. hint .. "|r"
     end
     m.detail = table.concat(lines, "\n")
-    m.where = Where(StepPlace(step, status))
+    -- Dónde: el NPC u objeto al que vas, la zona, coordenadas y distancia
+    local place = StepPlace(step, status)
+    local who = place and (NpcName(place) or (place.object and Name("object", place.object)) or place.objName)
+    m.where = place and ((who and (who .. " · ") or "") .. Where(place)) or nil
 
     local function add(k, isCurrent)
         local s, stt = g.steps[k], Guide.statuses[k]
@@ -629,7 +715,7 @@ function Guide.Model(open, scroll, maxRows)
             sub = place and Where(place) or first[1] or ""
         end
         m.rows[#m.rows + 1] = {
-            gindex = k, num = k, kind = StepKind(s, stt), title = StepTitle(s, stt), sub = sub,
+            gindex = k, num = k, kind = StepKind(s, stt), title = (stt.done or stt.behind) and StepTitle(s, stt) or Headline(s, stt), sub = sub,
             done = stt.done or stt.behind or false, current = isCurrent,
         }
     end
@@ -695,7 +781,7 @@ function Guide.ArrowTarget()
             end
         end
     end
-    local title = StepTitle(step, status)
+    local title = Headline(step, status)
     return {
         loc = loc,
         quest = { id = "guia:" .. i, title = title },
@@ -804,7 +890,7 @@ function Guide.DrawPins()
                 n = n + 1
                 local kind = StepKind(g.steps[k], stt)
                 local rgb = ns.Route.KIND_RGB[kind] or { 1, 1, 1 }
-                local tip = "Paso " .. k .. ": " .. StepTitle(g.steps[k], stt)
+                local tip = "Paso " .. k .. ": " .. Headline(g.steps[k], stt)
                 local isCur = k == cur
                 local function Style(p)
                     local size = isCur and 28 or 18
