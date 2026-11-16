@@ -11,9 +11,26 @@ Addon para **World of Warcraft: Forever** que te dice qué hacer para subir de n
 
 Necesita **Questie**, porque de ahí saca dónde están las misiones.
 
-## Con Polestar
+## Rutas de leveo (de Polestar, incluidas)
 
-Si tienes [Polestar](https://www.curseforge.com/wow/addons/polestar) instalado, Siguiente muestra **la ruta de Polestar** (optimizada para WoW Forever, por raza, clase y facción) en su propia ventana. Polestar lleva la cuenta de los pasos y su flecha camina por caminos reales; Siguiente solo la muestra. Siguiente no copia nada de Polestar: usa sus funciones mientras el juego corre. Se apaga en Opciones → AddOns → Siguiente → "Usar la ruta de Polestar". Sin Polestar, Siguiente usa su propia ruta.
+Siguiente trae **68 rutas de leveo del 1 al 60** para todas las razas, clases y facciones de WoW Forever,
+con sus textos en español. Vienen de [Polestar](https://github.com/fitzforge/polestar) (GPL-3.0) y se siguen
+**sin necesitar Polestar instalado**: Siguiente elige tu ruta por raza, facción y nivel, filtra los pasos por clase,
+detecta lo que haces y pasa sola a la ruta siguiente. Botón del mapa en la ventana: elegir otra ruta.
+
+Para actualizar las rutas desde una versión nueva de Polestar (instalado en tu PC):
+
+```
+cd tools
+npm install
+node importar-polestar.js "A:/World of Warcraft/_forever_/Interface/AddOns"
+```
+
+Si apagas las rutas (Opciones → AddOns → Siguiente), Siguiente calcula su propia ruta con los datos de Questie.
+
+## Licencia
+
+GPL-3.0 (ver `LICENSE` y `CREDITOS.md`).
 
 ## Comandos
 

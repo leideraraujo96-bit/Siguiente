@@ -127,7 +127,7 @@ function Bridge.Model(listOpen, scroll, maxRows)
     local at = Try(E.GetStepIndex)
     local live = (E.GetLiveStep and Try(E.GetLiveStep)) or at
     local total = (E.StepTotal and Try(E.StepTotal)) or count
-    local m = { rows = {}, guideTitle = guide.title }
+    local m = { rows = {}, guideTitle = guide.title, fromPolestar = true }
 
     if not at then
         m.title = "Guía terminada"

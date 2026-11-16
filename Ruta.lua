@@ -689,7 +689,7 @@ function Route.Sync()
     local db = ns.GetDB()
     if not db or not Route.enabled then return end
     -- Con Polestar, la ruta es la suya: la propia descansa (sin números en el mapa).
-    if ns.Bridge and ns.Bridge.Active() then
+    if (ns.Guide and ns.Guide.Active()) or (ns.Bridge and ns.Bridge.Active()) then
         if Route.pinsShown then Route.DrawPins() end
         return
     end
@@ -1089,7 +1089,7 @@ function Route.DrawPins()
     for _, p in pairs(miniPins) do p:Hide() end
     Route.pinsShown = false
     if not Route.enabled then return end
-    if ns.Bridge and ns.Bridge.Active() then return end
+    if (ns.Guide and ns.Guide.Active()) or (ns.Bridge and ns.Bridge.Active()) then return end
     Route.pinsShown = true
 
     -- Un círculo por lugar: pasos seguidos en el mismo sitio comparten círculo ("3-4").

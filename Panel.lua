@@ -111,6 +111,10 @@ local function GetRow(i, parent)
     r:SetScript("OnClick", function(self, button)
         local d = self.data
         if not d then return end
+        if d.gindex then -- paso de las rutas incluidas
+            if button == "RightButton" then ns.Guide.Skip(d.gindex) elseif not d.done then ns.Guide.Focus(d.gindex) end
+            return
+        end
         if d.index then -- paso de Polestar
             if button == "RightButton" then ns.Bridge.Skip(d.index) else ns.Bridge.Goto(d.index) end
             if ns.RequestRefresh then ns.RequestRefresh() end
@@ -230,6 +234,10 @@ function Panel.Init(frame, title, stats, body)
     P.card.where:SetJustifyH("LEFT")
     P.card:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     P.card:SetScript("OnClick", function(_, button)
+        if ns.Guide and ns.Guide.Active() then
+            if button == "RightButton" then ns.Guide.Skip() else ns.Guide.Focus(nil) end
+            return
+        end
         local polestar = ns.Bridge and ns.Bridge.Active()
         if button == "RightButton" then
             if polestar then ns.Bridge.Skip() else ns.Route.SkipGroup((ns.Route.CurrentGroup())) end
@@ -242,6 +250,8 @@ function Panel.Init(frame, title, stats, body)
     P.card:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("Paso actual", 1, 1, 1)
+        local note = P.model and P.model.note
+        if note and note ~= "" then GameTooltip:AddLine(note, 1, 0.95, 0.75, true) GameTooltip:AddLine(" ") end
         GameTooltip:AddLine("La flecha te lleva aquí. Se marca solo al hacerlo.", 0.85, 0.85, 0.85, true)
         if ns.Bridge and ns.Bridge.Active() then
             GameTooltip:AddLine("Ruta de Polestar (optimizada para WoW Forever).", 0.6, 0.8, 1, true)
@@ -271,6 +281,21 @@ function Panel.Init(frame, title, stats, body)
     P.card.doBtn = GroupButton("En grupo", "do")
     P.card:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+    -- Botón "Rutas" (mapa) junto al engranaje: elegir la ruta a seguir
+    P.routes = CreateFrame("Button", nil, frame)
+    P.routes:SetSize(14, 14)
+    P.routes:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -42, -7)
+    P.routes:SetNormalTexture("Interface\\Icons\\INV_Misc_Map_01")
+    P.routes:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    P.routes:SetScript("OnClick", function() Panel.ShowPicker() end)
+    P.routes:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Elegir ruta")
+        GameTooltip:AddLine("Las rutas de Polestar para tu raza, clase y facción.", 0.85, 0.85, 0.85, true)
+        GameTooltip:Show()
+    end)
+    P.routes:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     -- Botón de la lista completa
     P.toggle = CreateFrame("Button", nil, frame)
     P.toggle:SetSize(150, 16)
@@ -290,6 +315,93 @@ function Panel.Init(frame, title, stats, body)
         scroll = math.max(0, scroll - delta)
         if ns.Refresh then ns.Refresh() end
     end)
+end
+
+---------------------------------------------------------------------------
+-- Elegir ruta: lista de las rutas para tu personaje (clic para seguirla)
+---------------------------------------------------------------------------
+local picker
+local PICK_ROWS = 18
+function Panel.ShowPicker()
+    if not (ns.Guide and ns.GUIAS) then return end
+    if not picker then
+        picker = CreateFrame("Frame", "SiguientePicker", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        picker:SetSize(300, 60 + PICK_ROWS * 20)
+        picker:SetPoint("CENTER")
+        picker:SetFrameStrata("DIALOG")
+        picker:EnableMouse(true)
+        picker:SetMovable(true)
+        picker:RegisterForDrag("LeftButton")
+        picker:SetScript("OnDragStart", picker.StartMoving)
+        picker:SetScript("OnDragStop", picker.StopMovingOrSizing)
+        if picker.SetBackdrop then
+            picker:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                tile = true, tileSize = 16, edgeSize = 14,
+                insets = { left = 3, right = 3, top = 3, bottom = 3 },
+            })
+            picker:SetBackdropColor(0, 0, 0, 0.92)
+        end
+        picker.title = picker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        picker.title:SetPoint("TOPLEFT", 12, -10)
+        picker.title:SetText("Elige tu ruta")
+        picker.sub = picker:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        picker.sub:SetPoint("TOPLEFT", picker.title, "BOTTOMLEFT", 0, -2)
+        picker.sub:SetText("Rutas de Polestar para tu personaje (rueda del mouse para ver más)")
+        local close = CreateFrame("Button", nil, picker, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT", 2, 2)
+        picker.rows = {}
+        for k = 1, PICK_ROWS do
+            local b = CreateFrame("Button", nil, picker)
+            b:SetSize(276, 18)
+            b:SetPoint("TOPLEFT", 12, -44 - (k - 1) * 20)
+            b.hl = b:CreateTexture(nil, "BACKGROUND")
+            b.hl:SetAllPoints()
+            b.hl:SetColorTexture(1, 0.82, 0, 0.15)
+            b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            b.text:SetPoint("LEFT", 4, 0)
+            b.text:SetWidth(268)
+            b.text:SetJustifyH("LEFT")
+            b:SetScript("OnEnter", function(self) self.hl:SetColorTexture(1, 0.82, 0, 0.3) end)
+            b:SetScript("OnLeave", function(self) self.hl:SetColorTexture(1, 0.82, 0, self.current and 0.15 or 0) end)
+            b:SetScript("OnClick", function(self)
+                if self.id then
+                    ns.Guide.Set(self.id)
+                    print("|cffffd100Siguiente|r: sigues la ruta " .. self.label .. ".")
+                    picker:Hide()
+                end
+            end)
+            picker.rows[k] = b
+        end
+        picker.offset = 0
+        picker:EnableMouseWheel(true)
+        picker:SetScript("OnMouseWheel", function(self, delta)
+            self.offset = math.max(0, self.offset - delta)
+            Panel.FillPicker()
+        end)
+    end
+    picker.offset = 0
+    Panel.FillPicker()
+    picker:Show()
+end
+
+function Panel.FillPicker()
+    local list = ns.Guide.List()
+    local cur = ns.Guide.Get()
+    picker.offset = math.min(picker.offset, math.max(0, #list - PICK_ROWS))
+    for k = 1, PICK_ROWS do
+        local b, e = picker.rows[k], list[k + picker.offset]
+        if e then
+            b.id, b.label = e.id, e.title
+            b.current = cur and cur.id == e.id
+            b.text:SetText((b.current and "|cffffd100» " or "") .. e.title .. (b.current and "|r" or ""))
+            b.hl:SetColorTexture(1, 0.82, 0, b.current and 0.15 or 0)
+            b:Show()
+        else
+            b:Hide()
+        end
+    end
 end
 
 -- Lo que se ve ahora en el panel, en texto (para /sig debug y pruebas).
@@ -389,7 +501,7 @@ function Panel.Render(tips)
         P.level:SetText("Nivel " .. info.level .. " (máximo)")
         P.eta:SetText("")
     else
-        P.level:SetText(string.format("Nivel %d · %.0f%%", info.level or 0, (info.pct or 0) * 100))
+        P.level:SetText(string.format("Nivel %d · %.0f%%", math.floor(info.level or 0), (info.pct or 0) * 100))
         P.eta:SetText(info.eta and ("sube en ~" .. info.eta) or "")
     end
     y = y - 14
@@ -402,7 +514,9 @@ function Panel.Render(tips)
     -- Qué mostrar: la ruta de Polestar (si está) o la propia de Siguiente
     local open = db.opt.listOpen
     local maxRows = open and LIST_ROWS or COMPACT_ROWS
-    local m = (ns.Bridge and ns.Bridge.Active() and ns.Bridge.Model(open, scroll, maxRows)) or Panel.RouteModel(open, maxRows)
+    local m = (ns.Guide and ns.Guide.Active() and ns.Guide.Model(open, scroll, maxRows))
+        or (ns.Bridge and ns.Bridge.Active() and ns.Bridge.Model(open, scroll, maxRows))
+        or Panel.RouteModel(open, maxRows)
     P.model = m
 
     -- Paso actual
@@ -412,8 +526,10 @@ function Panel.Render(tips)
     if m.num then
         local head = (m.viewing and "VIENDO PASO " or (m.focus and "PASO ELEGIDO " or "PASO ")) .. m.num
             .. (m.total and (" DE " .. m.total) or "")
-        if m.guideTitle then
+        if m.guideTitle and m.fromPolestar then
             head = head .. "  ·  " .. m.guideTitle .. "  |cff80c0ff(Polestar)|r"
+        elseif m.guideTitle then
+            head = head .. "  ·  " .. m.guideTitle
         else
             head = head .. "  |cff909090(ruta de Siguiente)|r"
         end

@@ -193,9 +193,36 @@ local function Build()
         function() return opt.arrowScale end,
         function(v) opt.arrowScale = v; ns.ApplyLook() end)
 
+    -- Rutas incluidas
+    y = Header(y, "Rutas de leveo (incluidas en Siguiente)")
+    y = Check(y, "Seguir las rutas paso a paso",
+        "Rutas del 1 al 60 para tu raza, clase y facción, optimizadas para WoW Forever (vienen de Polestar, "
+        .. "código abierto GPL-3.0). No hace falta tener Polestar instalado. Si las apagas, Siguiente calcula su propia ruta.",
+        function() return opt.useGuides ~= false end,
+        function(v)
+            opt.useGuides = v
+            if ns.Guide then ns.Guide.Tick() ns.Guide.DrawPins() end
+            ns.Route.MarkDirty(0)
+            ns.Route.DrawPins()
+            ns.Refresh()
+        end)
+    Button(20, y, 140, "Elegir ruta", "Lista de rutas para tu personaje: clic en una para seguirla.",
+        function() if ns.Panel then ns.Panel.ShowPicker() end end)
+    Button(166, y, 140, "Ruta siguiente", "Pasa a la ruta que sigue a la actual.",
+        function()
+            local id = ns.Guide and ns.Guide.NextGuide()
+            Say(id and "pasas a la ruta siguiente." or "no hay una ruta siguiente.")
+        end)
+    Button(312, y, 150, "Recuperar saltados", "Vuelve a mostrar los pasos que saltaste en esta ruta.",
+        function()
+            if ns.Guide then ns.Guide.ResetSkips() end
+            Say("pasos saltados recuperados.")
+        end)
+    y = y - 40
+
     -- Polestar
-    y = Header(y, "Ruta de Polestar")
-    y = Check(y, "Usar la ruta de Polestar (si está instalado)",
+    y = Header(y, "Polestar en vivo (solo si lo tienes activado)")
+    y = Check(y, "Usar la ventana de Polestar en vivo (si está activado)",
         "Muestra en esta ventana la ruta de Polestar, optimizada para WoW Forever según tu raza, clase y facción. "
         .. "Polestar sigue llevando la cuenta de los pasos y su flecha camina por caminos reales. "
         .. "Sin Polestar, Siguiente usa su propia ruta.",

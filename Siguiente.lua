@@ -21,7 +21,8 @@ ns.DEFAULTS = {
     allowGroup = false,  -- incluir misiones de grupo (élite)
     allowDungeon = false,-- incluir misiones de mazmorra
     listOpen = false,    -- lista completa de pasos abierta
-    usePolestar = true,  -- si Polestar está instalado, usar su ruta
+    usePolestar = false, -- si Polestar está instalado y activado, usar su ventana de guía en vivo
+    useGuides = true,    -- seguir las rutas de Polestar incluidas en Siguiente (no hace falta Polestar)
 }
 local eventFrame = CreateFrame("Frame")
 
@@ -757,7 +758,13 @@ local function LocateQuest(Q, questID)
 end
 
 local function PickTarget()
-    -- Con la ruta activa, la flecha sigue el paso actual.
+    -- Con las rutas incluidas, la flecha va al paso actual de la guía.
+    if ns.Guide and ns.Guide.Active() then
+        Arrow.target = ns.Guide.ArrowTarget()
+        Arrow.status = (not Arrow.target) and "Ruta terminada" or nil
+        return
+    end
+    -- Con la ruta propia activa, la flecha sigue el paso actual.
     local route = ns.Route
     if route and route.enabled then
         Arrow.target = route.ArrowTarget()
@@ -814,7 +821,9 @@ arrowFrame:SetScript("OnDragStop", function(self)
 end)
 -- Clic derecho: saltar esta misión por 10 minutos y apuntar a la siguiente.
 arrowFrame:SetScript("OnClick", function()
-    if ns.Route and ns.Route.enabled then
+    if ns.Guide and ns.Guide.Active() then
+        ns.Guide.Skip()
+    elseif ns.Route and ns.Route.enabled then
         ns.Route.SkipGroup((ns.Route.CurrentGroup()))
     elseif Arrow.target then
         Arrow.skip[Arrow.target.quest.id] = GetTime() + 600
@@ -1052,6 +1061,11 @@ SlashCmdList.SIGUIENTE = function(msg)
         if ns.Bridge then
             local on, why = ns.Bridge.Status()
             print("  ruta de Polestar:", on and ("|cff40ff40sí|r — " .. why) or ("|cffff8040no|r — " .. why))
+        end
+        if ns.Guide then
+            local g = ns.Guide.Get()
+            print("  rutas incluidas:", ns.Guide.Active() and "sí" or "no",
+                g and (" — " .. ns.Guide.Title(g) .. ", paso " .. tostring(ns.Guide.current) .. " de " .. #g.steps) or "")
         end
         local missing = ns.Route and ns.Route.DebugMissing and ns.Route.DebugMissing() or {}
         print("  pasos sin lugar conocido:", #missing)

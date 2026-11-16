@@ -15,8 +15,9 @@ $dist = Join-Path $root "dist"
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
 
-# Solo los archivos del addon: el .toc y los .lua que lista.
-$files = @("Siguiente.toc") + (Get-Content $toc | Where-Object { $_ -match '^[^#\s].*\.lua\s*$' } | ForEach-Object { $_.Trim() })
+# Los archivos del addon: el .toc, los .lua que lista y las licencias (la GPL pide que vayan con él).
+$files = @("Siguiente.toc", "LICENSE", "CREDITOS.md", "Guias\LICENSE-DATA.txt") +
+    (Get-Content $toc | Where-Object { $_ -match '^[^#\s].*\.lua\s*$' } | ForEach-Object { $_.Trim() })
 
 # Zip con rutas "Siguiente/archivo" (barra normal; Compress-Archive de PowerShell 5 usa "\", que rompe algunos descompresores).
 Add-Type -AssemblyName System.IO.Compression
@@ -25,7 +26,8 @@ $zipPath = Join-Path $dist $zipName
 $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
     foreach ($f in $files) {
-        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $root $f), "Siguiente/$f") | Out-Null
+        $entry = "Siguiente/" + ($f -replace '\\', '/')
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $root $f), $entry) | Out-Null
     }
 } finally {
     $zip.Dispose()
