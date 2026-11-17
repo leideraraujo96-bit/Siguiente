@@ -12,6 +12,24 @@ local OBJECTIVE = { kill = true, collect = true, talk = true, interact = true, u
 local KIND = { accept = "accept", turnin = "turnin", ["goto"] = "travel", enter = "travel", fly = "travel",
     getfp = "travel", sethome = "travel" }
 
+-- Correcciones a mano (Guias/Correcciones.lua): coordenadas que Polestar dejó mal.
+-- Solo se aplican si el objetivo aún tiene la coordenada vieja.
+for gid, list in pairs(ns.CORRECCIONES or {}) do
+    local g = ns.GUIAS and ns.GUIAS[gid]
+    if g then
+        for _, s in ipairs(g.steps or {}) do
+            for _, gl in ipairs(s.goals or {}) do
+                for _, c in ipairs(list) do
+                    if gl.quest == c.quest and gl.t == c.t and (not c.map or gl.map == c.map)
+                        and gl.x and math.abs(gl.x - c.era[1]) < 0.05 and math.abs(gl.y - c.era[2]) < 0.05 then
+                        gl.x, gl.y = c.x, c.y
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- Objetos que empiezan una misión: en la ruta hay "consigue X" (sin misión) y "acepta" con ese objeto.
 -- Se marcan (con la misión que empiezan) para explicar "consíguelo y haz clic derecho en él", y para dar
 -- el "consigue" por hecho cuando ya aceptaste la misión (el juego se lleva el objeto al aceptarla).
