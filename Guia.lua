@@ -1091,7 +1091,9 @@ function Guide.DrawPins()
                     p.edge:SetPoint("BOTTOMRIGHT", e, -e)
                     if isCur then p.edge:SetVertexColor(1, 0.82, 0, 1) else p.edge:SetVertexColor(0, 0, 0, 0.9) end
                     p.tip = (isCur and "|cffffd100Paso actual|r\n" or "") .. tip
-                    p:Show()
+                    -- No se muestra aquí: lo muestra HBD cuando lo coloca. Si lo mostráramos y HBD no lo
+                    -- colocara (en el minimapa ignora lo que está a más de ~500 m), el número se quedaría
+                    -- donde estaba el pin anterior: justo encima de tu flecha al cambiar de paso.
                 end
                 if opt.mapPins ~= false then
                     local p = Pin(pins, n)
@@ -1101,6 +1103,8 @@ function Guide.DrawPins()
                 if n <= PINS_ON_MINIMAP and opt.miniPins ~= false then
                     local p = Pin(minis, n)
                     Style(p)
+                    p:Hide()
+                    p:ClearAllPoints()
                     pcall(Pins.AddMinimapIconMap, Pins, Guide, p, place.map, place.x / 100, place.y / 100, true, isCur)
                 end
                 if n >= limit then break end

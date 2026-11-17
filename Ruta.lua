@@ -1122,13 +1122,15 @@ function Route.DrawPins()
         if opt.mapPins ~= false then
             local wp = MakePin(worldPins, i)
             StylePin(wp, g, isCurrent)
-            wp:Show()
+            -- HBD lo muestra al colocarlo en el mapa (ver Guia.lua, DrawPins).
             pcall(Q.Pins.AddWorldMapIconMap, Q.Pins, Route, wp, loc.uiMap, loc.x / 100, loc.y / 100, flag)
         end
         if i <= PINS_ON_MINIMAP and opt.miniPins ~= false then
             local mp = MakePin(miniPins, i)
             StylePin(mp, g, isCurrent)
-            mp:Show()
+            -- Sin posición vieja y oculto: solo HBD lo muestra, y solo si está a su alcance.
+            mp:Hide()
+            mp:ClearAllPoints()
             pcall(Q.Pins.AddMinimapIconMap, Q.Pins, Route, mp, loc.uiMap, loc.x / 100, loc.y / 100, true, isCurrent)
         end
     end
